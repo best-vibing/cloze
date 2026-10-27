@@ -65,7 +65,9 @@ flowchart TB
 |---|---|---|
 | 프로세스 구성 | API 서버와 워커를 같은 패키지에서 프로세스만 분리 | PDF 파서 격리, 긴 작업이 API를 막지 않게. 이 규모에서 마이크로서비스는 불필요 |
 | 작업 큐 | **Taskiq + taskiq-redis `RedisStreamBroker`** | asyncio 기반, ack로 워커가 죽어도 작업이 남음. arq는 유지보수 전용이라 제외 → [ADR-001](decisions/ADR-001-task-queue-taskiq.md) |
-| 작업 상태의 기준 | **PostgreSQL** | Redis가 재시작돼도 진행 상태·부분 성공 정보가 남아야 함. Redis는 전달만 담당 |
+| 웹 프레임워크 | **FastAPI** | pydantic 계약에서 API 문서 자동 생성, asyncio 기본, 원래 앱 코드 재사용 → [ADR-009](decisions/ADR-009-web-framework-fastapi.md) |
+| LLM | **Gemini API 무료 티어**, 모델은 설정으로 교체 | 비용 0, 한·영과 구조화 출력 지원. 무료 티어 입력은 제품 개선에 쓰임 → [ADR-010](decisions/ADR-010-llm-gemini.md) |
+| 작업 상태의 기준 | **PostgreSQL** | Redis가 재시작돼도 진행 상태·부분 성공 정보가 남아야 함. Redis는 전달만 담당. SQLite 대신 고른 이유 → [ADR-008](decisions/ADR-008-database-postgresql.md) |
 | 결과 백엔드 | `RedisAsyncResultBackend`는 디버깅용 보조로만, 만료 시간 설정 | 상태 조회 API는 여기를 읽지 않음 |
 | 원본 PDF 경로 | 업로드 API가 검사 후 Object Storage에 저장, 큐에는 세트 ID만 | 큐 메시지에 파일을 싣지 않음 |
 | 식별자 | 작업 ID = 빈칸 세트 ID, 모든 ID는 무작위 UUID, 남의 리소스는 404 | 멱등성·상태 조회 키가 하나, 존재 여부를 숨김 → [ADR-006](decisions/ADR-006-ids-and-not-found.md) |
