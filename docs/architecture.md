@@ -51,6 +51,7 @@ flowchart TB
     P3 <--> GM
     P6 --> PG
     P6 --> OS
+    L --> PG
     S --> PG
     Q --> PG
     G --> PG
@@ -117,7 +118,11 @@ flowchart TB
 | `POST /attempts/{id}/reveal` | 제출한 시도의 정답 공개. 공개 시각 기록 | Postgres(읽기·쓰기) |
 | `DELETE /documents/{id}` | 삭제 표시 후 응답. 실제 삭제는 정리 작업 | Postgres, Storage |
 
-인증과 한도 검사는 모든 API 앞단의 공통 의존성으로 둔다. 요청·응답 모양, 오류 형식과 코드 목록은 [데이터 계약](design/data-contract.md). 채점 규칙과 입력칸 표시는 [채점·입력칸 표시](design/grading-and-overlay.md).
+인증과 한도 검사는 모든 API 앞단의 공통 의존성으로 둔다.
+
+- **공개 경로:** 웹 페이지(정적 파일)와 `POST /auth/login`만. 나머지 API와 `/images`는 세션이 필요하고, 없으면 `unauthorized`.
+- **세션 확인:** 쿠키의 서명만 믿지 않는다. 요청마다 사용자가 존재하고 쿠키의 `session_version`이 `users`의 값과 같은지 확인한다. 계정을 지우거나 버전을 올리면 그 계정의 모든 세션이 바로 끊긴다.
+- **CSRF 방어:** 상태를 바꾸는 요청은 POST·DELETE만 쓰고, SameSite=Lax 쿠키에 더해 `Origin` 헤더가 자기 주소인지 확인한다. 요청·응답 모양, 오류 형식과 코드 목록은 [데이터 계약](design/data-contract.md). 채점 규칙과 입력칸 표시는 [채점·입력칸 표시](design/grading-and-overlay.md).
 
 ### 3.2 Taskiq 워커
 - 실행: API와 같은 패키지, 별도 컨테이너. 메모리 제한을 건다(PDF 파서 격리).
@@ -174,7 +179,7 @@ cloze/
   config       환경 변수에서 한도·모델 이름·타임아웃을 읽음. 신뢰성 설계 5절의 값이 기본값
   worker/      Taskiq 작업: DB·스토리지에서 읽고 → core.pipeline → 저장·상태 갱신 → ack
   api/         FastAPI 라우터, 요청·응답 스키마, 인증·한도 의존성, 웹 페이지(정적 파일)·이미지 제공
-  cli/         로드맵 0~3단계용: 파일 경로 → core.pipeline → 로컬 폴더에 JSON·이미지. 계정 만들기(create-user)
+  cli/         로드맵 0~3단계용: 파일 경로 → core.pipeline → 로컬 폴더에 JSON·이미지. 계정 관리(create-user, set-password, delete-user)
 frontend/
 tests/         직접 만든 작은 PDF만 커밋. 기준 PDF 세트는 CLOZE_SAMPLES_DIR 경로에서 읽고, 없으면 건너뜀
 ```
@@ -260,15 +265,17 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 | 서비스 | 역할 | 메모 |
 |---|---|---|
 | `api` | FastAPI. 웹 페이지·API·이미지를 한 주소로 | 무상태. 같은 출처라 CORS 설정이 필요 없음 |
-| `worker` | Taskiq 워커 | 메모리 제한, 파서 격리 |
+| `migrate` | 한 번 실행하고 끝남: `alembic upgrade head` | `api`·`worker`는 이게 성공한 뒤에 시작. 마이그레이션은 추가만(새 테이블·nullable 컬럼·인덱스) |
+| `worker` | Taskiq 워커 | 메모리 제한, 파서 격리. 발표 때는 메모리가 허락하는 만큼 늘림 |
 | `redis` | Stream 브로커 | AOF 켬 |
-| `postgres` | DB | 정기 백업 |
+| `postgres` | DB | 시연 기기 데이터는 발표 후 지움. 백업·복구 절차는 클라우드로 옮길 때(9.1) |
 | 파일 | Compose 볼륨(로컬 디스크) | S3 호환은 어댑터로 교체(되면 좋음) |
 
-비밀값(API 키, DB 비밀번호, 세션 서명 키)은 환경 변수로 주입하고 레포에는 예시 파일만 둔다.
+비밀값(API 키, DB 비밀번호, 세션 서명 키, 이미지 서명 키, GitHub Container Registry 읽기 토큰)은 환경 변수로 주입하고 레포에는 예시 파일만 둔다.
 
 - **노출:** 시연 기기(팀원 기기)의 호스트에 Tailscale을 설치하고 `api` 포트를 노출한다. 개발 중에는 Serve(같은 tailnet의 팀원만), 발표·리허설 때만 Funnel(누구나). HTTPS는 Tailscale이 맡는다.
-- **CD(끌어오기):** `develop` 머지 → CI 통과 → GitHub Container Registry에 이미지 → 시연 기기가 켜져 있는 동안 주기적으로 확인해 `docker compose up -d`로 교체. 개인 기기에서 GitHub 실행기(self-hosted runner)는 돌리지 않는다.
+- **CD(끌어오기):** `develop` 머지 → CI 통과 → GitHub Container Registry에 이미지 → 시연 기기가 켜져 있는 동안 주기적으로 확인해 `docker compose up -d`로 교체(이때 `migrate`가 먼저 돈다). 레포가 비공개라 이미지도 비공개이므로, 시연 기기에는 `read:packages` 권한만 있는 토큰을 둔다. 개인 기기에서 GitHub 실행기(self-hosted runner)는 돌리지 않는다.
+- **발표 설정:** 발표 때는 환경 변수로 한도를 바꿔 다시 띄운다(값은 [신뢰성 설계](design/reliability.md) 5.1). 서비스 전체 Gemini 한도는 그대로 둔다.
 - **클라우드 이전:** 평가 기준이 요구하면 같은 Compose를 VPS로 옮기고 그때 Caddy를 앞에 둔다. 근거와 검토한 대안은 [ADR-007](decisions/ADR-007-deploy-demo-machine-tailscale.md).
 
 ---
@@ -303,7 +310,7 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 | 보관 기간·자동 삭제 | 2.1(자료 열람 범위)에 따라 달라짐 | 로드맵 6단계 | 삭제 표시 → 정리 작업이 실제 삭제 |
 | 관측성(로그·오류 추적·지표 수집 위치) | 서버 코드가 없음 | 로드맵 5단계(워커·저장소 착수) | 운영 지표 목록, `llm_calls` 기록, 폴백·영구 오류 경보 |
 | 클라우드 배포(VPS 이전) | 시연까지는 시연 기기로 충분 | 평가 기준이 클라우드 배포를 요구할 때 | 같은 Compose, 그때 Caddy 추가(ADR-007) |
-| DB 마이그레이션·백업·복구 절차 | DB가 없음 | 로드맵 5단계 | Alembic 사용, 정기 백업 |
+| DB 백업·복구 절차 | 시연 기기 데이터는 발표 후 지움 | 클라우드로 옮길 때 | Alembic 마이그레이션은 결정됨(7장 `migrate`, DB가 처음 생기는 PR부터 적용) |
 | 프론트 구조(프레임워크, 화면 목록) | 프론트 스파이크 결과가 필요 | 로드맵 3단계(오버레이) 착수 시 | API 계약, 입력칸 규칙([채점·입력칸 표시](design/grading-and-overlay.md)) |
 | CI(자동 검사) | 검사할 코드가 아직 없음 | **레포 골격과 같은 시기(1주차)**. 처음부터 모든 PR이 정적 분석을 통과하게 | 없음 |
 
