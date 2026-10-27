@@ -1,7 +1,7 @@
 # 아키텍처 정의서 — PDF 빈칸 학습 서비스
 
 - 작성일: 2026-10-27
-- 수정: 2026-10-27 제작 방식 선택·자료 분석·품질 게이트 추가, 출처를 공식 문서로 교체. 같은 날 결정은 ADR로, 세부는 상세 설계서로 분리
+- 수정: 2026-10-27 제작 방식 선택·자료 분석·품질 게이트 추가, 출처를 공식 문서로 교체. 같은 날 결정은 ADR로, 세부는 상세 설계서로 분리. 코드 구조·식별자·API·데이터 모델·재사용·한도 추가(3.1~3.5)
 - 상태: **아키텍처 확정(구현 전).** 코드는 아직 없다.
 - 결정의 배경·검토한 선택지는 [아키텍처 결정 기록(ADR)](decisions/)에 결정마다 한 파일로 둔다. 이 문서의 결정 표는 요약이다.
 - 표기: **[확인]** = 출처로 확인함. **[미확인]** = 구현 전에 확인 필요. **[권장]** = 제안했으나 팀 확정 전.
@@ -16,7 +16,7 @@ flowchart TB
 
     subgraph API[FastAPI 서버]
         U[PDF 업로드<br/>검사 → 저장 → 큐]
-        S[작업 상태 조회<br/>DB 상태 읽기]
+        S[세트 상태 조회<br/>DB 상태 읽기]
         Q[문제 조회<br/>빈칸 위치·서명 URL]
         G[채점·오답노트<br/>DB 정답과 비교]
     end
@@ -43,7 +43,7 @@ flowchart TB
     B --> U & S & Q & G
     U -->|원본 PDF| OS
     U -->|상태 queued| PG
-    U -->|문서 ID만| R
+    U -->|세트 ID만| R
     R <-->|배달 · ack| W
     P2A <--> GM
     P3 <--> GM
@@ -67,7 +67,11 @@ flowchart TB
 | 작업 큐 | **Taskiq + taskiq-redis `RedisStreamBroker`** | asyncio 기반, ack로 워커가 죽어도 작업이 남음. arq는 유지보수 전용이라 제외 → [ADR-001](decisions/ADR-001-task-queue-taskiq.md) |
 | 작업 상태의 기준 | **PostgreSQL** | Redis가 재시작돼도 진행 상태·부분 성공 정보가 남아야 함. Redis는 전달만 담당 |
 | 결과 백엔드 | `RedisAsyncResultBackend`는 디버깅용 보조로만, 만료 시간 설정 | 상태 조회 API는 여기를 읽지 않음 |
-| 원본 PDF 경로 | 업로드 API가 검사 후 Object Storage에 저장, 큐에는 문서 ID만 | 큐 메시지에 파일을 싣지 않음 |
+| 원본 PDF 경로 | 업로드 API가 검사 후 Object Storage에 저장, 큐에는 세트 ID만 | 큐 메시지에 파일을 싣지 않음 |
+| 식별자 | 작업 ID = 빈칸 세트 ID, 모든 ID는 무작위 UUID, 남의 리소스는 404 | 멱등성·상태 조회 키가 하나, 존재 여부를 숨김 → [ADR-006](decisions/ADR-006-ids-and-not-found.md) |
+| 코드 구조 | `cloze/core`는 계산만 하고 바깥(DB·네트워크·큐)을 모른다(3.4) | CLI로 DB 없이 파이프라인 검증, 담당별 병렬 작업 |
+| 재사용 | 같은 사용자 안에서만 문서·추출·세트·페이지 결과를 재사용. 전역 캐시 없음(3.5) | 비용 절감. 사용자 간 공유는 프라이버시·저작권 위험 |
+| 비용 상한 | 서비스 전체 하루 Gemini 호출 상한을 넘으면 작업을 등록하지 않고 거절 | 핵심 기능 개발에 집중. 상한 초과 시 품질을 낮춰 계속 처리하는 방식은 채택하지 않음 |
 | 실패 처리 | 검증 실패 → 오류 붙여 1회 재시도 → 규칙 기반 선택기로 폴백 | Gemini 장애에도 서비스가 멈추지 않음 |
 | 제작 방식 선택 | 업로드할 때 함께 고른다. 자동(기본)과 프리셋 4종(어휘 문맥, 개념 용어, 수치·날짜, 정의) | 작업 하나·상태 한 벌 구조 유지 → [ADR-004](decisions/ADR-004-preset-at-upload.md) |
 | 자료 분석 | "자동"일 때만 파이프라인 안에서 Gemini 1회로 자료 유형을 판단해 방식을 정한다. 분석할 페이지는 시스템이 고른다(5.3) | 사용자는 문서 전체를 올리기만 하면 되고, 페이지를 고르는 부담을 지지 않는다 |
@@ -96,18 +100,20 @@ flowchart TB
 ### 3.1 FastAPI 서버
 | API | 하는 일 | 읽고 쓰는 곳 |
 |---|---|---|
-| `POST /documents` | PDF와 제작 방식(`preset`, 기본 `auto`)을 받는다. 크기·MIME 시그니처 검사, 암호화·JS 포함 PDF 거부, 원본을 스토리지에 저장, 상태 `queued` 기록, 작업 등록 | Storage(쓰기), Postgres(쓰기), Redis(작업 등록) |
-| `GET /jobs/{id}` | 진행 상태 반환(폴링) | Postgres(읽기) |
-| `GET /blank-sets/{id}` | 빈칸 목록(`blank_id`, bbox, type, hint), 가린 이미지의 서명 URL, 적용된 제작 방식과 그 이유(자동일 때). **정답은 포함하지 않음** | Postgres(읽기), 서명 URL 생성 |
+| `POST /documents` | PDF와 제작 방식(`preset`, 기본 `auto`)을 받는다. 업로드 검사·한도 검사 → 원본 저장(같은 PDF면 기존 문서 재사용) → 첫 세트 `queued` 기록 → 작업 등록 | Storage(쓰기), Postgres(쓰기), Redis(작업 등록) |
+| `POST /documents/{id}/blank-sets` | 다른 방식이나 새 seed로 다시 만들기. 같은 조건의 세트가 있으면 그 ID를 돌려줌 | Postgres(쓰기), Redis(작업 등록) |
+| `GET /documents` | 내 문서 목록과 세트 요약 | Postgres(읽기) |
+| `GET /blank-sets/{id}` | 상태·진행률(폴링 겸용). 완료되면 빈칸 목록(`blank_id`, bbox, type, hint), 가린 이미지의 서명 URL, 적용된 방식과 이유. **정답은 포함하지 않음** | Postgres(읽기), 서명 URL 생성 |
 | `POST /blank-sets/{id}/attempts` | 전체 답안 일괄 제출 → 칸별 결과·점수, 오답 기록. 시도 횟수 제한 | Postgres(읽기·쓰기) |
 | `GET /attempts/{id}/reveal` | 제출 후에만 정답 공개 | Postgres(읽기) |
 | `DELETE /documents/{id}` | 업로드·파생물 삭제 | Postgres, Storage |
 
-인증, 사용자별 한도, rate limit은 모든 API 앞단의 공통 의존성으로 둔다.
+인증과 한도 검사는 모든 API 앞단의 공통 의존성으로 둔다. 요청·응답 모양, 오류 형식과 코드 목록은 [데이터 계약](design/data-contract.md).
 
 ### 3.2 Taskiq 워커
 - 실행: API와 같은 패키지, 별도 컨테이너. 메모리 제한을 건다(PDF 파서 격리).
-- 작업 단위: 빈칸 세트 하나(= 문서 하나 + 정책 하나 + 시드).
+- 작업 단위: 빈칸 세트 하나(= 문서 하나 + 정책 하나 + 시드). 작업 ID는 세트 ID다.
+- 동시성: 워커 프로세스 하나가 작업 하나씩 처리한다. PDF 파싱·이미지 처리는 CPU 계산이고 pdfplumber는 순수 파이썬이라 스레드로는 빨라지지 않기 때문이다. 처리량은 워커 컨테이너 수로 늘린다. 작업 안에서 Gemini 응답 대기는 여러 페이지를 동시에 기다린다(3.5).
 - 파이프라인 단계는 입력·출력이 명확한 함수로 만들고, 바뀔 수 있는 부분만 어댑터로 뺀다.
 
 | 어댑터 | 현재 구현 | 교체 후보 |
@@ -122,9 +128,73 @@ flowchart TB
 ### 3.3 저장소
 | 저장소 | 담는 것 | 비고 |
 |---|---|---|
-| PostgreSQL | documents, pages, blank_sets(상태, 요청한 방식·적용된 방식, 자료 분석 결과, 페이지별 품질 지표 포함), blanks(정답은 서버 전용), attempts | 상태의 유일한 기준 |
+| PostgreSQL | users, documents, pages, blank_sets, blank_set_pages, blanks(정답은 서버 전용), attempts | 상태의 유일한 기준. 한도 집계도 여기서 조회 |
 | Object Storage | 원본 PDF, 페이지 원본 이미지, 가린 이미지, 페이지별 토큰 JSON | 원본 이미지에는 서명 URL을 발급하지 않음 |
-| Redis | Taskiq Stream(작업 전달), 결과 백엔드(보조) | AOF(`appendonly yes`)로 재시작 시 대기 작업 보존 |
+| Redis | Taskiq Stream(작업 전달), 결과 백엔드(보조) | AOF(`appendonly yes`)로 재시작 시 대기 작업 보존. 캐시·카운터 용도로는 쓰지 않음 |
+
+```
+users 1─N documents 1─N blank_sets 1─N blanks
+              │              ├─1─N blank_set_pages
+              └─1─N pages    └─1─N attempts N─1 users
+```
+
+`pages`(원본 이미지·토큰)는 문서에 붙여 세트끼리 재사용하고, 가린 이미지는 세트마다 다르므로 `blank_set_pages`에 둔다. 테이블별 필드는 [데이터 계약](design/data-contract.md) 4절.
+
+### 3.4 코드 구조
+
+언어는 Python, 패키지 이름은 `cloze`다.
+
+```
+cloze/
+  core/        파이프라인 본체. 계산만 한다
+    models     단계 사이 데이터 모양(데이터 계약)      pydantic
+    extract/   렌더링, 토큰 추출                        pypdfium2, pdfplumber
+    filter     후보 필터
+    analyze    자료 분석(자동 모드)
+    select/    선택기: gemini(프롬프트·응답 해석), rule
+    gate       형식 검증·품질 게이트·정답 생성
+    redact     래스터 채우기                            Pillow
+    pipeline   위 단계를 페이지 단위로 호출, 재시도·폴백 흐름
+  infra/       바깥과 연결
+    gemini     실제 API 호출, 타임아웃, 동시 호출 상한   google-genai
+    storage    로컬 디스크 / S3 호환, 서명 URL
+    db/        테이블(SQLAlchemy), 쿼리 함수, 마이그레이션(Alembic)
+  worker/      Taskiq 작업: DB·스토리지에서 읽고 → core.pipeline → 저장·상태 갱신 → ack
+  api/         FastAPI 라우터, 요청·응답 스키마, 인증·한도 의존성
+  cli/         로드맵 0~3단계용: 파일 경로 → core.pipeline → 로컬 폴더에 JSON·PNG
+frontend/
+```
+
+**의존 규칙: `core`는 `infra`·`worker`·`api`·`cli`를 import하지 않고, 네트워크·DB·큐와 직접 통신하지 않는다.** pdfplumber·Pillow처럼 메모리 안에서 계산만 하는 라이브러리는 써도 된다. Gemini 호출처럼 바깥이 필요한 곳은 `core`가 함수 모양(`ask_llm`)만 정하고, 실제 구현은 부르는 쪽(`worker`·`cli`·테스트)이 넘겨준다.
+
+| 이 규칙이 없으면 | 이 규칙이 있으면 |
+|---|---|
+| 박스 뷰어를 돌리려면 Postgres·Redis를 먼저 띄워야 한다 | `cli`에 PDF 파일 하나만 주면 된다 |
+| 품질 게이트 테스트마다 Gemini를 실제로 불러 비용이 들고 결과가 매번 다르다 | 가짜 `ask_llm`으로 같은 입력에 같은 결과 |
+| DB 테이블을 바꾸면 PDF·LLM 담당 코드까지 고친다 | `infra`·`worker`만 고친다 |
+
+| 담당 | 폴더 |
+|---|---|
+| PDF 처리 | `core/extract`, `core/redact` |
+| LLM·검증 | `core/select`, `core/analyze`, `core/gate` |
+| 서버·워커 | `infra`, `worker`, `api` |
+| 프론트 | `frontend` |
+| 공동 소유 | `core/models`(데이터 계약). 바꿀 때는 PR 리뷰 필수 |
+
+### 3.5 재사용과 한도
+
+재사용은 **한 사용자 안에서만** 한다. 따로 캐시 저장소를 두지 않고 3.3의 테이블로 처리한다.
+
+| 층 | 무엇을 | 키 | 효과 |
+|---|---|---|---|
+| L1 문서 | 같은 PDF를 다시 올리면 기존 문서를 씀 | `(owner_id, sha256)` | 업로드 저장 생략 |
+| L2 추출 | 페이지 이미지·토큰은 문서당 한 번 | `document_id` | 다시 만들기에서 렌더링·추출 생략 |
+| L3 세트 | 같은 조건의 세트가 진행 중이거나 완료됐으면 그 ID를 돌려줌 | `(document_id, preset_requested, seed, model, prompt_version)` | 중복 클릭·재전송 방지. 다시 만들기는 기본으로 새 seed라 걸리지 않음 |
+| L4 페이지 | 재실행 시 `blank_set_pages`에 있는 페이지는 건너뜀 | `(set_id, page_no)` | 워커 장애 후 재실행해도 Gemini 비용이 두 번 들지 않음 |
+
+프롬프트를 고치면 `core`의 `prompt_version`을 올려 L3 재사용을 끊는다.
+
+한도는 작업 등록 전에 `api`에서 검사하고(업로드 크기·쪽수, 사용자 하루 쪽수, 사용자 진행 중 세트 수, 서비스 전체 하루 Gemini 호출 수), 작업 안에서는 `infra/gemini`가 동시 호출 수를 제한한다. 서비스 전체 상한을 넘으면 `service_limit_exceeded`로 거절한다. 한도 초기값은 [신뢰성 설계](design/reliability.md) 5절, Gemini 오류의 재시도 층은 같은 문서 1절.
 
 ---
 
@@ -138,10 +208,10 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 
 ### 5.1 정상 흐름
 1. 브라우저가 PDF 업로드.
-2. API가 검사 → 원본을 Storage에 저장 → Postgres에 빈칸 세트 상태 `queued` 기록 → 빈칸 세트 ID만 담아 작업 등록 → 작업 ID 반환.
+2. API가 업로드·한도 검사 → 원본을 Storage에 저장(같은 PDF면 기존 문서 재사용) → Postgres에 빈칸 세트 상태 `queued` 기록 → 세트 ID만 담아 작업 등록 → 세트 ID 반환.
 3. 워커가 Stream에서 작업을 받음. Postgres 상태를 `running`으로 갱신.
-4. 페이지별로 텍스트 레이어 추출(부족하면 OCR) → 좌표 정규화 → 후보 필터. 제작 방식이 `auto`면 이 시점에 자료 분석([상세](design/selection-and-quality-gate.md))으로 방식을 정한다.
-5. 페이지별로 Gemini 선택 → 형식 검증·품질 게이트([상세](design/selection-and-quality-gate.md))·정답 생성 → 래스터 채우기로 가린 이미지 생성. 페이지마다 진행률을 Postgres에 기록.
+4. 문서의 페이지 이미지·토큰이 이미 있으면 재사용하고(L2), 없으면 페이지별로 텍스트 레이어 추출(부족하면 OCR) → 좌표 정규화 → 후보 필터. 제작 방식이 `auto`면 이 시점에 자료 분석([상세](design/selection-and-quality-gate.md))으로 방식을 정한다.
+5. 이미 끝난 페이지는 건너뛰고(L4), 나머지 페이지별로 Gemini 선택 → 형식 검증·품질 게이트([상세](design/selection-and-quality-gate.md))·정답 생성 → 래스터 채우기로 가린 이미지 생성. 페이지마다 진행률을 Postgres에 기록.
 6. 정답·좌표는 Postgres, 이미지는 Storage에 멱등 저장. 상태 `done` 또는 `partial`(일부 페이지 실패).
 7. 워커가 ack.
 8. 브라우저는 상태 조회 API를 폴링하다가 완료되면 문제 조회 API로 빈칸 목록과 서명 URL을 받고, 이미지는 Storage에서 직접 받는다.
