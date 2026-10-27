@@ -14,15 +14,17 @@
 flowchart TB
     B[사용자 웹 브라우저]
 
-    subgraph API[FastAPI 서버]
+    subgraph API[FastAPI 서버 · 웹 페이지와 API를 한 주소로]
+        L[로그인<br/>세션 쿠키]
         U[PDF 업로드<br/>검사 → 저장 → 큐]
         S[세트 상태 조회<br/>DB 상태 읽기]
-        Q[문제 조회<br/>빈칸 위치·서명 URL]
+        Q[문제 조회<br/>빈칸 위치·서명된 이미지 경로]
         G[채점·오답노트<br/>DB 정답과 비교]
+        I[이미지 제공<br/>서명·만료·소유자 확인]
     end
 
     R[(Redis Stream<br/>ack·재배달, AOF)]
-    OS[(Object Storage<br/>PDF·가린 이미지)]
+    OS[(파일 저장소<br/>로컬 디스크 기본 · S3 호환)]
     PG[(PostgreSQL<br/>정답·좌표·상태·오답)]
     GM[Gemini API<br/>유료 티어]
 
@@ -40,7 +42,7 @@ flowchart TB
         FB -. 같은 게이트 통과분만 .-> P4
     end
 
-    B --> U & S & Q & G
+    B --> L & U & S & Q & G
     U -->|원본 PDF| OS
     U -->|상태 queued| PG
     U -->|세트 ID만| R
@@ -49,10 +51,12 @@ flowchart TB
     P3 <--> GM
     P6 --> PG
     P6 --> OS
+    L --> PG
     S --> PG
     Q --> PG
     G --> PG
-    B -. 서명 URL로 가린 이미지 직접 다운로드 .-> OS
+    B -->|서명된 경로| I
+    I -->|가린 이미지만| OS
 ```
 
 핵심 구조는 **코드베이스 하나, 프로세스 둘(API + 워커)인 모듈러 모놀리스**다. API는 요청을 빠르게 받고 돌려주는 일만 하고, 수 초~수 분 걸리는 PDF 처리는 전부 워커가 한다.
@@ -67,7 +71,7 @@ flowchart TB
 | 작업 큐 | **Taskiq + taskiq-redis `RedisStreamBroker`** | asyncio 기반, ack로 워커가 죽어도 작업이 남음. arq는 유지보수 전용이라 제외 → [ADR-001](decisions/ADR-001-task-queue-taskiq.md) |
 | 작업 상태의 기준 | **PostgreSQL** | Redis가 재시작돼도 진행 상태·부분 성공 정보가 남아야 함. Redis는 전달만 담당 |
 | 결과 백엔드 | `RedisAsyncResultBackend`는 디버깅용 보조로만, 만료 시간 설정 | 상태 조회 API는 여기를 읽지 않음 |
-| 원본 PDF 경로 | 업로드 API가 검사 후 Object Storage에 저장, 큐에는 세트 ID만 | 큐 메시지에 파일을 싣지 않음 |
+| 원본 PDF 경로 | 업로드 API가 검사 후 파일 저장소에 저장, 큐에는 세트 ID만 | 큐 메시지에 파일을 싣지 않음 |
 | 식별자 | 작업 ID = 빈칸 세트 ID, 모든 ID는 무작위 UUID, 남의 리소스는 404 | 멱등성·상태 조회 키가 하나, 존재 여부를 숨김 → [ADR-006](decisions/ADR-006-ids-and-not-found.md) |
 | 코드 구조 | `cloze/core`는 계산만 하고 바깥(DB·네트워크·큐)을 모른다(3.4) | CLI로 DB 없이 파이프라인 검증, 담당별 병렬 작업 |
 | 재사용 | 같은 사용자 안에서만 문서·추출·세트·페이지 결과를 재사용. 전역 캐시 없음(3.5) | 비용 절감. 사용자 간 공유는 프라이버시·저작권 위험 |
@@ -80,11 +84,12 @@ flowchart TB
 | 품질 게이트 | 형식 검증 뒤에 결정적 코드로 품질의 바닥을 검사한다(5.3). LLM 판정은 바닥에 쓰지 않는다 | 형식만 맞고 쓸모없는 빈칸을 막는다. 실패할 수 있는 검사기에 기대면 바닥이 보장되지 않는다 |
 | 흐름 제어 도구 | LangGraph 같은 에이전트 프레임워크는 쓰지 않는다 | 다음 단계를 코드가 정하는 고정 파이프라인 → [ADR-005](decisions/ADR-005-no-agent-framework.md) |
 | 후보 필터 | 좌표 추출과 Gemini 호출 사이 | 불용어·머리글/바닥글·저신뢰 OCR 단어 사전 제거 |
-| 이미지 전달 | 짧게 만료되는 서명 URL, 가린 이미지만 발급 | API 부하 감소, 원본 이미지 노출 차단 |
+| 이미지 전달 | 가린 이미지만. API가 서명·만료·소유자를 확인해 직접 내보냄(`GET /images/{key}`) | 원본 이미지 노출 차단. 기본 저장소가 로컬 디스크라 스토리지 서명 URL을 쓰지 않음 → [ADR-007](decisions/ADR-007-deploy-demo-machine-tailscale.md) |
 | 리댁션 방식 | 렌더링한 이미지에 사각형을 칠하는 래스터 채우기로 통일 | 텍스트 PDF와 스캔본이 같은 경로 → [ADR-003](decisions/ADR-003-raster-redaction.md) |
 | PDF 라이브러리 | **pypdfium2(렌더링) + pdfplumber(단어·글자 좌표)** | 라이선스 부담 없음 → [ADR-002](decisions/ADR-002-pdf-library-pdfplumber.md) |
 | Gemini 요금제 | 개발 중 무료 티어, 다른 사람 자료를 받기 전에 유료 전환 | 무료 티어 입력은 Google 제품 개선에 쓰이고 사람이 검토할 수 있음 [확인] |
-| 배포 | VPS + Docker Compose | 소규모(수십 명 이하)에 가장 단순하고 저렴 |
+| 배포 | 시연 기기 + Docker Compose. Tailscale로 노출(개발 중 Serve, 발표 때 Funnel). FastAPI가 웹 페이지·API를 한 주소로, Caddy 없음 | 발표 시연까지면 충분하고 비용이 없음. 같은 출처라 쿠키·CORS가 단순 → [ADR-007](decisions/ADR-007-deploy-demo-machine-tailscale.md) |
+| 인증 | 아이디·비밀번호. 계정은 팀이 CLI로 발급(가입 기능 없음), 서명된 세션 쿠키 | 사용자별 문서·한도·시도 기록이 성립. Google 로그인은 후속 → [ADR-007](decisions/ADR-007-deploy-demo-machine-tailscale.md) |
 | 개발 환경 | 파이썬 버전과 라이브러리 버전을 팀 전체가 통일 | 10/27 팀 미팅 결정. 구체 버전은 레포 생성 시 고정 |
 
 ### 2.1 권장안 (팀 확정 필요)
@@ -92,7 +97,7 @@ flowchart TB
 | 검토 항목 | 권장 | 비고 |
 |---|---|---|
 | 서비스 규모 | (b) 지인·소규모 | 배포 구성(VPS)이 이 전제를 따름 |
-| 인증·비용 부담 | Google 로그인 + 운영자 부담 + 사용자별 일일 한도 | 계정이 있어야 사용자별 캐시·한도·삭제 요청이 성립. BYOK는 후속 옵션 |
+| 비용 부담 | 운영자 부담 + 사용자별 일일 한도 | 인증 방식은 결정됨(2장 인증 행). BYOK는 후속 옵션 |
 | 자료 열람 범위 | (a) 본인이 올린 자료를 본인만 열람 | 공유 기능은 v2. 접근 제어가 "업로더 본인" 한 줄 규칙으로 끝남 |
 
 ---
@@ -102,6 +107,8 @@ flowchart TB
 ### 3.1 FastAPI 서버
 | API | 하는 일 | 읽고 쓰는 곳 |
 |---|---|---|
+| `POST /auth/login`, `POST /auth/logout` | 아이디·비밀번호 확인 후 세션 쿠키 발급 / 삭제. 실패가 반복되면 잠시 막음 | Postgres(읽기) |
+| `GET /images/{key}` | 서명·만료·소유자를 확인한 뒤 가린 이미지를 내보냄 | 파일 저장소(읽기) |
 | `POST /documents` | PDF와 제작 방식(`preset`, 기본 `auto`)을 받는다. 같은 요청 키면 기존 세트를 돌려줌. 업로드 검사(쪽수·암호화·JS는 제한 걸린 하위 프로세스에서)·한도 검사 → 원본 저장(같은 PDF면 기존 문서 재사용) → 첫 세트 `queued` 기록 → 작업 등록 | Storage(쓰기), Postgres(쓰기), Redis(작업 등록) |
 | `POST /documents/{id}/blank-sets` | 다른 방식이나 새 seed로 다시 만들기. 같은 요청 키(`Idempotency-Key`)면 기존 세트 ID를 돌려줌 | Postgres(쓰기), Redis(작업 등록) |
 | `GET /documents` | 내 문서 목록과 세트 요약 | Postgres(읽기) |
@@ -111,7 +118,11 @@ flowchart TB
 | `POST /attempts/{id}/reveal` | 제출한 시도의 정답 공개. 공개 시각 기록 | Postgres(읽기·쓰기) |
 | `DELETE /documents/{id}` | 삭제 표시 후 응답. 실제 삭제는 정리 작업 | Postgres, Storage |
 
-인증과 한도 검사는 모든 API 앞단의 공통 의존성으로 둔다. 요청·응답 모양, 오류 형식과 코드 목록은 [데이터 계약](design/data-contract.md). 채점 규칙과 입력칸 표시는 [채점·입력칸 표시](design/grading-and-overlay.md).
+인증과 한도 검사는 모든 API 앞단의 공통 의존성으로 둔다.
+
+- **공개 경로:** 웹 페이지(정적 파일)와 `POST /auth/login`만. 나머지 API와 `/images`는 세션이 필요하고, 없으면 `unauthorized`.
+- **세션 확인:** 쿠키의 서명만 믿지 않는다. 요청마다 사용자가 존재하고 쿠키의 `session_version`이 `users`의 값과 같은지 확인한다. 계정을 지우거나 버전을 올리면 그 계정의 모든 세션이 바로 끊긴다.
+- **CSRF 방어:** 상태를 바꾸는 요청은 POST·DELETE만 쓰고, SameSite=Lax 쿠키에 더해 `Origin` 헤더가 자기 주소인지 확인한다. 요청·응답 모양, 오류 형식과 코드 목록은 [데이터 계약](design/data-contract.md). 채점 규칙과 입력칸 표시는 [채점·입력칸 표시](design/grading-and-overlay.md).
 
 ### 3.2 Taskiq 워커
 - 실행: API와 같은 패키지, 별도 컨테이너. 메모리 제한을 건다(PDF 파서 격리).
@@ -124,7 +135,7 @@ flowchart TB
 | PDF 백엔드 | pypdfium2 + pdfplumber | PyMuPDF(상용 라이선스 또는 AGPL 공개 시) |
 | 선택기 | Gemini | 규칙 기반 선택기(폴백 겸용) |
 | 렌더러 | strict(서버에서 가린 이미지 생성) | local(개발·디버그 전용, 정답을 클라이언트에 전달) |
-| 스토리지 | 로컬 디스크(개발) | S3 호환 서비스(배포) |
+| 스토리지 | 로컬 디스크(기본) | S3 호환(되면 좋음) |
 
 이 경계 덕분에 로드맵 0~3단계(박스 뷰어 → 랜덤 가림 → LLM 선택 → 오버레이)는 API·워커 없이 CLI 스크립트로 파이프라인만 돌려 검증하고, 4단계에서 함수들을 워커 작업으로 감싸면 된다.
 
@@ -132,7 +143,7 @@ flowchart TB
 | 저장소 | 담는 것 | 비고 |
 |---|---|---|
 | PostgreSQL | users, documents, pages, blank_sets, blank_set_pages, blanks(정답은 서버 전용), attempts, llm_calls | 상태의 유일한 기준. 한도 집계도 여기서 조회 |
-| Object Storage | 원본 PDF, 페이지 원본 이미지, 가린 이미지, 페이지별 토큰 JSON | 원본 이미지에는 서명 URL을 발급하지 않음 |
+| 파일 저장소 | 원본 PDF, 페이지 원본 이미지, 가린 이미지, 페이지별 토큰 JSON | 기본은 Compose 볼륨(로컬 디스크). 이미지는 API가 확인 후 내보내고, 원본 이미지는 내보내지 않음 |
 | Redis | Taskiq Stream(작업 전달), 결과 백엔드(보조) | AOF(`appendonly yes`)로 재시작 시 대기 작업 보존. 캐시·카운터 용도로는 쓰지 않음 |
 
 ```
@@ -167,8 +178,8 @@ cloze/
     db/        테이블(SQLAlchemy), 쿼리 함수, 마이그레이션(Alembic)
   config       환경 변수에서 한도·모델 이름·타임아웃을 읽음. 신뢰성 설계 5절의 값이 기본값
   worker/      Taskiq 작업: DB·스토리지에서 읽고 → core.pipeline → 저장·상태 갱신 → ack
-  api/         FastAPI 라우터, 요청·응답 스키마, 인증·한도 의존성
-  cli/         로드맵 0~3단계용: 파일 경로 → core.pipeline → 로컬 폴더에 JSON·이미지
+  api/         FastAPI 라우터, 요청·응답 스키마, 인증·한도 의존성, 웹 페이지(정적 파일)·이미지 제공
+  cli/         로드맵 0~3단계용: 파일 경로 → core.pipeline → 로컬 폴더에 JSON·이미지. 계정 관리(create-user, set-password, delete-user)
 frontend/
 tests/         직접 만든 작은 PDF만 커밋. 기준 PDF 세트는 CLOZE_SAMPLES_DIR 경로에서 읽고, 없으면 건너뜀
 ```
@@ -253,14 +264,19 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 
 | 서비스 | 역할 | 메모 |
 |---|---|---|
-| `caddy` | HTTPS, 리버스 프록시, 정적 파일 | 인증서 자동 갱신 |
-| `api` | FastAPI | 무상태. CORS는 허용 도메인 목록으로 제한 |
-| `worker` | Taskiq 워커 | 메모리 제한, 파서 격리 |
+| `api` | FastAPI. 웹 페이지·API·이미지를 한 주소로 | 무상태. 같은 출처라 CORS 설정이 필요 없음 |
+| `migrate` | 한 번 실행하고 끝남: `alembic upgrade head` | `api`·`worker`는 이게 성공한 뒤에 시작. 마이그레이션은 추가만(새 테이블·nullable 컬럼·인덱스) |
+| `worker` | Taskiq 워커 | 메모리 제한, 파서 격리. 발표 때는 메모리가 허락하는 만큼 늘림 |
 | `redis` | Stream 브로커 | AOF 켬 |
-| `postgres` | DB | 정기 백업 |
-| 스토리지 | 개발: 로컬 볼륨 / 배포: S3 호환 서비스 | 어댑터로 교체 |
+| `postgres` | DB | 시연 기기 데이터는 발표 후 지움. 백업·복구 절차는 클라우드로 옮길 때(9.1) |
+| 파일 | Compose 볼륨(로컬 디스크) | S3 호환은 어댑터로 교체(되면 좋음) |
 
-비밀값(API 키, DB 비밀번호)은 환경 변수로 주입하고 레포에는 예시 파일만 둔다.
+비밀값(API 키, DB 비밀번호, 세션 서명 키, 이미지 서명 키, GitHub Container Registry 읽기 토큰)은 환경 변수로 주입하고 레포에는 예시 파일만 둔다.
+
+- **노출:** 시연 기기(팀원 기기)의 호스트에 Tailscale을 설치하고 `api` 포트를 노출한다. 개발 중에는 Serve(같은 tailnet의 팀원만), 발표·리허설 때만 Funnel(누구나). HTTPS는 Tailscale이 맡는다.
+- **CD(끌어오기):** `develop` 머지 → CI 통과 → GitHub Container Registry에 이미지 → 시연 기기가 켜져 있는 동안 주기적으로 확인해 `docker compose up -d`로 교체(이때 `migrate`가 먼저 돈다). 레포가 비공개라 이미지도 비공개이므로, 시연 기기에는 `read:packages` 권한만 있는 토큰을 둔다. 개인 기기에서 GitHub 실행기(self-hosted runner)는 돌리지 않는다.
+- **발표 설정:** 발표 때는 환경 변수로 한도를 바꿔 다시 띄운다(값은 [신뢰성 설계](design/reliability.md) 5.1). 서비스 전체 Gemini 한도는 그대로 둔다.
+- **클라우드 이전:** 평가 기준이 요구하면 같은 Compose를 VPS로 옮기고 그때 Caddy를 앞에 둔다. 근거와 검토한 대안은 [ADR-007](decisions/ADR-007-deploy-demo-machine-tailscale.md).
 
 ---
 
@@ -290,13 +306,13 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 
 | 항목 | 왜 미뤘나 | 언제 정하나(조건) | 지금 정해진 것 |
 |---|---|---|---|
-| 인증 방식(로그인 흐름, 세션·토큰) | 팀 결정(2.1) 전 | 2.1 확정 직후, 로드맵 6단계 전 | `users` 최소 필드, 모든 API 앞단의 공통 의존성 |
+| Google 로그인 | v1은 아이디·비밀번호로 충분 | 시연 경로가 끝난 뒤(되면 좋음) | 아이디·비밀번호, 세션 쿠키(ADR-007) |
 | 보관 기간·자동 삭제 | 2.1(자료 열람 범위)에 따라 달라짐 | 로드맵 6단계 | 삭제 표시 → 정리 작업이 실제 삭제 |
 | 관측성(로그·오류 추적·지표 수집 위치) | 서버 코드가 없음 | 로드맵 5단계(워커·저장소 착수) | 운영 지표 목록, `llm_calls` 기록, 폴백·영구 오류 경보 |
-| 배포 환경 구분(개발·운영) | 배포 전 | 처음 VPS에 올리기 전 | Docker Compose 서비스 구성(7장) |
-| DB 마이그레이션·백업·복구 절차 | DB가 없음 | 로드맵 5단계 | Alembic 사용, 정기 백업 |
+| 클라우드 배포(VPS 이전) | 시연까지는 시연 기기로 충분 | 평가 기준이 클라우드 배포를 요구할 때 | 같은 Compose, 그때 Caddy 추가(ADR-007) |
+| DB 백업·복구 절차 | 시연 기기 데이터는 발표 후 지움 | 클라우드로 옮길 때 | Alembic 마이그레이션은 결정됨(7장 `migrate`, DB가 처음 생기는 PR부터 적용) |
 | 프론트 구조(프레임워크, 화면 목록) | 프론트 스파이크 결과가 필요 | 로드맵 3단계(오버레이) 착수 시 | API 계약, 입력칸 규칙([채점·입력칸 표시](design/grading-and-overlay.md)) |
-| CI(자동 검사) | 검사할 코드가 거의 없음 | 레포 골격 PR 다음 PR | 없음 |
+| CI(자동 검사) | 검사할 코드가 아직 없음 | **레포 골격과 같은 시기(1주차)**. 처음부터 모든 PR이 정적 분석을 통과하게 | 없음 |
 
 ## 10. 다음 행동
 
