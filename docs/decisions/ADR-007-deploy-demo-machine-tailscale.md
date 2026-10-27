@@ -18,9 +18,36 @@
 
 | 선택지 | 장점 | 단점 | 결론 |
 |---|---|---|---|
-| VPS | 항상 켜짐, "배포" 증거가 가장 확실 | 월 비용, 초기 설정 | 평가 기준이 요구할 때의 이전 대상으로 남김 |
-| PaaS(Vercel 등) | 배포가 쉬움 | 워커·Redis·Postgres를 함께 돌려야 해서 정적 호스팅으로는 안 됨 | 탈락 |
+| VPS | 항상 켜짐, "배포" 증거가 가장 확실 | 월 비용, 초기 설정 | 평가 기준이 요구할 때의 이전 대상으로 남김(아래 "클라우드로 옮길 때") |
+| 정적 호스팅(Vercel 등) | 배포가 쉬움 | 워커·Redis·Postgres를 함께 돌려야 해서 정적 호스팅으로는 안 됨 | 탈락 |
 | **팀원 기기 + Tailscale** | 비용 없음, 공유기·학교 방화벽 설정 불필요(바깥으로 나가는 연결만 씀) | 기기가 꺼지면 중단 | **채택** |
+
+**클라우드로 옮길 때** (2026-10-28 검토. 평가 기준이 클라우드 배포를 요구할 때만 옮긴다)
+
+| 방식 | 예 | 우리 코드에서 바뀌는 것 | 결론 |
+|---|---|---|---|
+| **VPS 한 대 + 같은 Compose** | AWS Lightsail, Hetzner, Oracle Cloud | 거의 없음. 기기만 바뀜 | **이전 대상** |
+| PaaS(컨테이너 호스팅) | Fly.io, Render, Railway | 디스크가 매번 지워져 파일 저장소를 S3 호환으로 바꿔야 함. Postgres·Redis는 관리형을 따로 붙임 | 지금은 과함 |
+| 대형 클라우드 관리형 조합 | Cloud Run + Cloud SQL + Memorystore + Cloud Storage | PaaS의 변경에 더해 설정이 가장 많음. 관리형 Redis가 비쌈 | 수업 규모에 안 맞음 |
+
+PaaS·관리형으로 가는 길은 PostgreSQL을 골라서 열려 있다([ADR-008](ADR-008-database-postgresql.md)).
+
+| 상황 | 쓸 곳 |
+|---|---|
+| 평가가 클라우드 배포를 요구하지 않음 | 시연 기기 그대로 |
+| 발표 때만 클라우드가 필요함 | **시간제 VPS를 발표 전후 며칠만.** 발표 전날 만들고 끝나면 지운다. Lightsail 4GB는 시간당 약 $0.033 [제3자 자료]라 사흘에 $3 미만 |
+| 발표 뒤에도 계속 운영함 | 그때 새 ADR로 정한다. 백업과 Gemini 유료 티어([ADR-010](ADR-010-llm-gemini.md) 재검토 조건)도 함께 |
+
+**Oracle Cloud Always Free를 이번에 쓰지 않는 이유** (공식 문서 기준)
+
+| 사실 | 우리에게 뜻하는 것 |
+|---|---|
+| Arm 무료 한도는 계정당 월 1,500 OCPU시간·9,000GB시간, 상시 켜 두면 2코어·12GB(2026-06에 절반으로 줄어듦) | 이 서비스가 4GB쯤 가져가면 그 계정의 다른 장기 용도 몫이 줄어든다 |
+| 7일 동안 CPU(상위 95% 구간)·네트워크·메모리 사용률이 모두 20% 미만이면 회수될 수 있음 | 시연용은 대부분 놀고 있어서 회수 조건에 그대로 걸린다 |
+| 무료 Arm 자리가 자주 부족함("Out of host capacity") | 회수되거나 지운 뒤 다시 만들기 어렵다. 무료 자격은 남아도 실제로는 못 쓰게 될 수 있다 |
+| 중지했을 때 무료 자격을 잃는다는 규정은 없음 | 흔히 듣는 "중지하면 끝"은 자리 부족 때문에 생기는 현상으로 보인다 |
+
+꼭 쓰려면 장기 용도가 없는 팀원 계정으로 만든다(한도는 사람마다 따로). Arm이라 Docker 이미지를 Arm용으로도 빌드해야 한다.
 
 **공개 주소**
 
@@ -61,7 +88,7 @@
 - 공개는 발표 때만 하므로 노출 시간이 짧다. 그래도 공개하는 동안은 로그인 + 서비스 전체 하루 한도 + 로그인 시도 제한이 함께 막는다.
 - 발표 때 청중이 업로드까지 해 보도록 한도는 "발표 설정"(환경 변수)으로 바꾼다. 서비스 전체 Gemini 한도는 유지한다.
 - 시연 기기가 꺼지면 서비스가 멈춘다. 발표 당일 점검 목록(절전·자동 업데이트 끄기)과 녹화 영상으로 대비한다.
-- 평가 기준이 클라우드 배포를 요구하면 같은 Compose를 VPS로 옮기고 그때 Caddy를 앞에 둔다.
+- 평가 기준이 클라우드 배포를 요구하면 같은 Compose를 VPS로 옮긴다. 공개 주소는 Funnel을 그대로 쓰거나(Linux 지원) Caddy를 앞에 두고 HTTPS를 붙인다. VPS 메모리는 4GB 이상 [추정], 5주차 실측으로 정한다.
 
 ## 확인 필요
 
@@ -73,3 +100,5 @@
 - Tailscale 요금제(개인 요금제 무료, 비상업적 사용): https://tailscale.com/plans/
 - Cloudflare Quick Tunnels: https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/
 - ngrok 무료 요금제 한도: https://ngrok.com/docs/pricing-limits/free-plan-limits
+- Oracle Cloud Always Free 리소스(무료 한도, 유휴 회수 조건, 자리 부족): https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
+- Lightsail 4GB 시간 요금(제3자): https://www.vpsbenchmarks.com/hosters/amazon_lightsail/plans/4gb_2cores
