@@ -1,7 +1,7 @@
 # 아키텍처 정의서 — PDF 빈칸 학습 서비스
 
 - 작성일: 2026-10-27
-- 수정: 2026-10-27 제작 방식 선택·자료 분석·품질 게이트 추가, 출처를 공식 문서로 교체. 같은 날 결정은 ADR로, 세부는 상세 설계서로 분리. 코드 구조·식별자·API·데이터 모델·재사용·한도 추가(3.1~3.5)
+- 수정: 2026-10-27 제작 방식 선택·자료 분석·품질 게이트 추가, 출처를 공식 문서로 교체. 같은 날 결정은 ADR로, 세부는 상세 설계서로 분리. 코드 구조·식별자·API·데이터 모델·재사용·한도 추가(3.1~3.5). 이후 데이터 계약 보강(단계 계약, 정책, 오류 구분, 요청 키), 끝나지 않는 상태·삭제 후 재업로드·추출 버전·LLM 호출 기록 보강
 - 상태: **아키텍처 확정(구현 전).** 코드는 아직 없다.
 - 결정의 배경·검토한 선택지는 [아키텍처 결정 기록(ADR)](decisions/)에 결정마다 한 파일로 둔다. 이 문서의 결정 표는 요약이다.
 - 표기: **[확인]** = 출처로 확인함. **[미확인]** = 구현 전에 확인 필요. **[권장]** = 제안했으나 팀 확정 전.
@@ -100,13 +100,13 @@ flowchart TB
 ### 3.1 FastAPI 서버
 | API | 하는 일 | 읽고 쓰는 곳 |
 |---|---|---|
-| `POST /documents` | PDF와 제작 방식(`preset`, 기본 `auto`)을 받는다. 업로드 검사·한도 검사 → 원본 저장(같은 PDF면 기존 문서 재사용) → 첫 세트 `queued` 기록 → 작업 등록 | Storage(쓰기), Postgres(쓰기), Redis(작업 등록) |
-| `POST /documents/{id}/blank-sets` | 다른 방식이나 새 seed로 다시 만들기. 같은 조건의 세트가 있으면 그 ID를 돌려줌 | Postgres(쓰기), Redis(작업 등록) |
+| `POST /documents` | PDF와 제작 방식(`preset`, 기본 `auto`)을 받는다. 같은 요청 키면 기존 세트를 돌려줌. 업로드 검사·한도 검사 → 원본 저장(같은 PDF면 기존 문서 재사용) → 첫 세트 `queued` 기록 → 작업 등록 | Storage(쓰기), Postgres(쓰기), Redis(작업 등록) |
+| `POST /documents/{id}/blank-sets` | 다른 방식이나 새 seed로 다시 만들기. 같은 요청 키(`Idempotency-Key`)면 기존 세트 ID를 돌려줌 | Postgres(쓰기), Redis(작업 등록) |
 | `GET /documents` | 내 문서 목록과 세트 요약 | Postgres(읽기) |
 | `GET /blank-sets/{id}` | 상태·진행률(폴링 겸용). 완료되면 빈칸 목록(`blank_id`, bbox, type, hint), 가린 이미지의 서명 URL, 적용된 방식과 이유. **정답은 포함하지 않음** | Postgres(읽기), 서명 URL 생성 |
 | `POST /blank-sets/{id}/attempts` | 전체 답안 일괄 제출 → 칸별 결과·점수, 오답 기록. 시도 횟수 제한 | Postgres(읽기·쓰기) |
 | `GET /attempts/{id}/reveal` | 제출 후에만 정답 공개 | Postgres(읽기) |
-| `DELETE /documents/{id}` | 업로드·파생물 삭제 | Postgres, Storage |
+| `DELETE /documents/{id}` | 삭제 표시 후 응답. 실제 삭제는 정리 작업 | Postgres, Storage |
 
 인증과 한도 검사는 모든 API 앞단의 공통 의존성으로 둔다. 요청·응답 모양, 오류 형식과 코드 목록은 [데이터 계약](design/data-contract.md).
 
@@ -128,13 +128,14 @@ flowchart TB
 ### 3.3 저장소
 | 저장소 | 담는 것 | 비고 |
 |---|---|---|
-| PostgreSQL | users, documents, pages, blank_sets, blank_set_pages, blanks(정답은 서버 전용), attempts | 상태의 유일한 기준. 한도 집계도 여기서 조회 |
+| PostgreSQL | users, documents, pages, blank_sets, blank_set_pages, blanks(정답은 서버 전용), attempts, llm_calls | 상태의 유일한 기준. 한도 집계도 여기서 조회 |
 | Object Storage | 원본 PDF, 페이지 원본 이미지, 가린 이미지, 페이지별 토큰 JSON | 원본 이미지에는 서명 URL을 발급하지 않음 |
 | Redis | Taskiq Stream(작업 전달), 결과 백엔드(보조) | AOF(`appendonly yes`)로 재시작 시 대기 작업 보존. 캐시·카운터 용도로는 쓰지 않음 |
 
 ```
 users 1─N documents 1─N blank_sets 1─N blanks
               │              ├─1─N blank_set_pages
+              │              ├─1─N llm_calls
               └─1─N pages    └─1─N attempts N─1 users
 ```
 
@@ -148,6 +149,7 @@ users 1─N documents 1─N blank_sets 1─N blanks
 cloze/
   core/        파이프라인 본체. 계산만 한다
     models     단계 사이 데이터 모양(데이터 계약)      pydantic
+    errors     LLM 오류 종류(일시적·응답 불량·영구). infra가 이 종류로 바꿔 던진다
     extract/   렌더링, 토큰 추출                        pypdfium2, pdfplumber
     filter     후보 필터
     analyze    자료 분석(자동 모드)
@@ -159,13 +161,15 @@ cloze/
     gemini     실제 API 호출, 타임아웃, 동시 호출 상한   google-genai
     storage    로컬 디스크 / S3 호환, 서명 URL
     db/        테이블(SQLAlchemy), 쿼리 함수, 마이그레이션(Alembic)
+  config       환경 변수에서 한도·모델 이름·타임아웃을 읽음. 신뢰성 설계 5절의 값이 기본값
   worker/      Taskiq 작업: DB·스토리지에서 읽고 → core.pipeline → 저장·상태 갱신 → ack
   api/         FastAPI 라우터, 요청·응답 스키마, 인증·한도 의존성
   cli/         로드맵 0~3단계용: 파일 경로 → core.pipeline → 로컬 폴더에 JSON·PNG
 frontend/
+tests/         직접 만든 작은 PDF만 커밋. 기준 PDF 세트는 CLOZE_SAMPLES_DIR 경로에서 읽고, 없으면 건너뜀
 ```
 
-**의존 규칙: `core`는 `infra`·`worker`·`api`·`cli`를 import하지 않고, 네트워크·DB·큐와 직접 통신하지 않는다.** pdfplumber·Pillow처럼 메모리 안에서 계산만 하는 라이브러리는 써도 된다. Gemini 호출처럼 바깥이 필요한 곳은 `core`가 함수 모양(`ask_llm`)만 정하고, 실제 구현은 부르는 쪽(`worker`·`cli`·테스트)이 넘겨준다.
+**의존 규칙: `core`는 `infra`·`worker`·`api`·`cli`를 import하지 않고, 네트워크·DB·큐와 직접 통신하지 않는다.** pdfplumber·Pillow처럼 메모리 안에서 계산만 하는 라이브러리는 써도 된다. Gemini 호출처럼 바깥이 필요한 곳은 `core`가 함수 모양(`ask_llm`)만 정하고, 실제 구현은 부르는 쪽(`worker`·`cli`·테스트)이 넘겨준다. 단계 사이 입력·출력과 `ask_llm`의 모양은 [데이터 계약](design/data-contract.md) 1절.
 
 | 이 규칙이 없으면 | 이 규칙이 있으면 |
 |---|---|
@@ -179,7 +183,7 @@ frontend/
 | LLM·검증 | `core/select`, `core/analyze`, `core/gate` |
 | 서버·워커 | `infra`, `worker`, `api` |
 | 프론트 | `frontend` |
-| 공동 소유 | `core/models`(데이터 계약). 바꿀 때는 PR 리뷰 필수 |
+| 공동 소유 | `core/models`(데이터 계약), `core/errors`, `core/pipeline`. 바꿀 때는 PR 리뷰 필수 |
 
 ### 3.5 재사용과 한도
 
@@ -187,14 +191,14 @@ frontend/
 
 | 층 | 무엇을 | 키 | 효과 |
 |---|---|---|---|
-| L1 문서 | 같은 PDF를 다시 올리면 기존 문서를 씀 | `(owner_id, sha256)` | 업로드 저장 생략 |
-| L2 추출 | 페이지 이미지·토큰은 문서당 한 번 | `document_id` | 다시 만들기에서 렌더링·추출 생략 |
-| L3 세트 | 같은 조건의 세트가 진행 중이거나 완료됐으면 그 ID를 돌려줌 | `(document_id, preset_requested, seed, model, prompt_version)` | 중복 클릭·재전송 방지. 다시 만들기는 기본으로 새 seed라 걸리지 않음 |
+| L1 문서 | 같은 PDF를 다시 올리면 기존 문서를 씀 | `(owner_id, sha256)`, 삭제 표시 없는 문서만 | 업로드 저장 생략. 삭제한 뒤 다시 올리면 새 문서 |
+| L2 추출 | 페이지 이미지·토큰은 문서당 한 번 | `(document_id, extract_version)` | 다시 만들기에서 렌더링·추출 생략. 추출 코드가 바뀌면 다시 추출 |
+| L3 세트 | 같은 요청 키로 다시 오면 새로 만들지 않고 기존 세트를 돌려줌 | `(requested_by, idempotency_key)` | 중복 클릭·재전송 방지. 클라이언트가 동작 한 번마다 키 하나를 만든다 |
 | L4 페이지 | 재실행 시 `blank_set_pages`에 있는 페이지는 건너뜀 | `(set_id, page_no)` | 워커 장애 후 재실행해도 Gemini 비용이 두 번 들지 않음 |
 
-프롬프트를 고치면 `core`의 `prompt_version`을 올려 L3 재사용을 끊는다.
+추출 코드를 고치면 `core`의 `extract_version`을 올려 L2 재사용을 끊는다. 프롬프트를 고치면 `prompt_version`을 올린다. `prompt_version`은 재사용 키가 아니라 어느 프롬프트로 만든 세트인지 남기는 기록이다.
 
-한도는 작업 등록 전에 `api`에서 검사하고(업로드 크기·쪽수, 사용자 하루 쪽수, 사용자 진행 중 세트 수, 서비스 전체 하루 Gemini 호출 수), 작업 안에서는 `infra/gemini`가 동시 호출 수를 제한한다. 서비스 전체 상한을 넘으면 `service_limit_exceeded`로 거절한다. 한도 초기값은 [신뢰성 설계](design/reliability.md) 5절, Gemini 오류의 재시도 층은 같은 문서 1절.
+한도는 작업 등록 전에 `api`에서 검사하고(업로드 크기·쪽수, 사용자 하루 쪽수, 사용자 진행 중 세트 수, 서비스 전체 하루 Gemini 호출 수), 작업 안에서는 `infra/gemini`가 동시 호출 수를 제한한다. 서비스 전체 상한을 넘으면 `service_limit_exceeded`로 거절한다. Gemini 호출은 `llm_calls`에 한 건씩 기록하고 이 기록으로 센다. 한도 초기값은 [신뢰성 설계](design/reliability.md) 5절, Gemini 오류의 재시도 층은 같은 문서 1절.
 
 ---
 
@@ -235,6 +239,7 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 - **작업이 예외를 던지는 경우는 일시적 오류뿐이다.** 검증 실패·품질 미달·분석 실패·인식 실패는 파이프라인 안에서 처리하고 상태와 사유를 기록한다.
 - **작업 제한 시간 < `idle_timeout`.** 어기면 처리 중인 작업이 두 번 실행된다.
 - 같은 작업이 두 번 돌아도 결과가 같게 저장한다(멱등성). 상태 `done`은 모든 저장이 끝난 뒤에 쓰고, 그다음 ack.
+- **모든 세트는 결국 끝 상태(`done`/`partial`/`failed`)에 도착한다.** 실행 횟수는 Postgres의 `run_count`로 세고, 상한을 넘으면 `failed`로 끝낸다. 재시도 미들웨어나 재배달이 몇 번 일어나든 이 규칙이 우선한다.
 
 실패 담당 표, 시간 설정 초기값, 멱등성 절차는 [상세 설계서 — 신뢰성](design/reliability.md).
 
@@ -278,7 +283,7 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 ## 10. 다음 행동
 
 1. 2.1의 권장안 3건을 팀에서 확정한다.
-2. 공용 레포 생성, 파이썬·라이브러리 버전 고정.
+2. 레포 골격과 파이썬·라이브러리 버전 고정(레포는 생성됨).
 3. 모듈별 역할 분담: PDF 처리·좌표 추출 / LLM 선택·검증 / 프론트 오버레이·채점 화면 / 서버·DB·워커·개발 환경.
 4. 로드맵 0단계(박스 뷰어)부터 CLI로 구현.
 5. 로드맵 2단계를 마칠 때 품질 게이트 기준값을 보정한다([상세](design/selection-and-quality-gate.md) 2.5). 라벨 작업에 2명 이상 참여.
