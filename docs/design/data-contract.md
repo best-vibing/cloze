@@ -94,6 +94,9 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 
 | API | 요청 | 성공 응답 |
 |---|---|---|
+| `POST /auth/login` | `{login_id, password}` | `204`. 서명된 세션 쿠키(HttpOnly, Secure, SameSite=Lax, 7일 [가설]) 발급. 틀리면 `invalid_credentials` |
+| `POST /auth/logout` | — | `204`. 쿠키 삭제 |
+| `GET /images/{key}` | 쿼리 `exp`(만료 시각), `sig`(서명) | `200` 이미지. 서명이 맞고 만료 전이며 요청자가 소유자일 때만. 아니면 `not_found` |
 | `POST /documents` | multipart: `file`, `preset`(기본 `auto`). 헤더 `Idempotency-Key` | `202` `{document_id, blank_set_id}`. 같은 사용자가 같은 PDF를 올리면 기존 `document_id`를 돌려준다 |
 | `POST /documents/{id}/blank-sets` | `{preset}`. 헤더 `Idempotency-Key` | `202` `{blank_set_id}`. 같은 요청 키면 기존 세트 ID |
 | `GET /documents` | — | `200` 내 문서 목록, 문서마다 세트 요약(`blank_set_id`, `preset_applied`, `status`, `created_at`) |
@@ -121,7 +124,9 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 }
 ```
 
-`image_url`은 짧게 만료된다(만료 시간은 [신뢰성 설계](reliability.md) 2절). 이미지를 불러오다 만료로 실패하면 프론트는 `GET /blank-sets/{id}`를 한 번 다시 불러 새 URL을 받는다.
+계정 만들기는 API가 아니라 CLI(`create-user`)로 한다. 가입 엔드포인트는 없다(ADR-007).
+
+`image_url`은 API의 `/images/{key}?exp=…&sig=…` 경로이고, 짧게 만료된다(만료 시간은 [신뢰성 설계](reliability.md) 2절). 이미지를 불러오다 만료로 실패하면 프론트는 `GET /blank-sets/{id}`를 한 번 다시 불러 새 URL을 받는다.
 
 `queued`·`running`일 때는 `pages`가 비어 있고 `progress`만 의미가 있다. `failed`일 때는 `error: {code, message}`가 들어간다.
 
@@ -150,6 +155,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | 코드 | HTTP | 언제 |
 |---|---|---|
 | `unauthorized` | 401 | 로그인하지 않음 |
+| `invalid_credentials` | 401 | 아이디 또는 비밀번호가 틀림(어느 쪽이 틀렸는지 알려 주지 않는다) |
 | `not_found` | 404 | 없는 리소스, **또는 남의 리소스**(존재 여부를 숨긴다, ADR-006) |
 | `not_ready` | 409 | 아직 처리 중인 세트에 답안 제출 |
 | `file_too_large` | 413 | 파일 크기 상한 초과 |
@@ -159,6 +165,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `too_many_pages` | 422 | 쪽수 상한 초과 |
 | `daily_limit_exceeded` | 429 | 사용자 하루 처리 쪽수 초과 |
 | `too_many_running` | 429 | 사용자의 진행 중 세트 수 초과 |
+| `too_many_login_attempts` | 429 | 로그인 실패가 짧은 시간에 반복됨 |
 | `service_limit_exceeded` | 503 | 서비스 전체의 하루 Gemini 호출 상한 초과. 작업을 등록하지 않고 거절한다 |
 
 한도의 초기값은 [신뢰성 설계](reliability.md) 5절에 둔다.
@@ -174,7 +181,7 @@ users 1─N documents 1─N blank_sets 1─N blanks
 
 | 테이블 | 주요 필드 | 메모 |
 |---|---|---|
-| `users` | id, 외부 로그인 식별자, email, created_at | 인증 방식(아키텍처 2.1)이 정해지기 전이라 최소 필드만 |
+| `users` | id, login_id(고유), password_hash, display_name, created_at | 계정은 팀이 CLI로 만든다. 비밀번호는 솔트를 붙인 느린 해시(scrypt 또는 Argon2)로만 저장한다. Google 로그인이 붙으면 외부 식별자 필드를 더한다 |
 | `documents` | id, owner_id, sha256, 파일명, page_count, 원본 키, created_at, expires_at, deleted_at | `(owner_id, sha256)` 고유는 **삭제 표시가 없는 행에만** 적용한다(부분 고유 인덱스 `WHERE deleted_at IS NULL`). 삭제한 뒤 같은 PDF를 올리면 새 문서가 된다. 처리 상태 필드 없음(업로드 검사는 요청 안에서 끝난다) |
 | `pages` | (document_id, page_no, extract_version), 크기(pt), source, 원본 이미지 키, 토큰 JSON 키 | 같은 추출 버전이면 세트끼리 재사용 |
 | `blank_sets` | id(= 작업 ID), document_id, requested_by, idempotency_key, request_hash, preset_requested, preset_applied, analysis, seed, model, prompt_version, extract_version, status, progress, run_count, error_code, error_message, created_at, updated_at, finished_at | 상태의 유일한 기준. `(requested_by, idempotency_key)` 고유. `prompt_version`·`extract_version`은 기록용. `run_count`는 실행 횟수, `updated_at`은 진행할 때마다 갱신 |
