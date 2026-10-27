@@ -26,10 +26,13 @@
 | `extract` | PDF 바이트 | 페이지마다 `{page 정보, 이미지(메모리), tokens}` | PDF 처리 |
 | `filter` | **문서 전체 페이지**의 tokens, 정책 | 페이지마다 `{후보 token id 목록, 제외한 id와 사유}` | LLM·검증 |
 | `analyze` | 대표 페이지 tokens, `ask_llm` | `{doc_type, preset, reason, source: llm / default}` | LLM·검증 |
-| `select` | 페이지 tokens, 후보 id, 정책, `ask_llm`, 직전 실패 사유(재시도 때) | `{spans: [[token id…]], 칸별 type·hint·variants, source: gemini / rule}` | LLM·검증 |
-| `gate` | 페이지 tokens, select 결과, 정책 | `{blanks, 탈락 칸과 사유, quality, passed}` | LLM·검증 |
-| `redact` | 페이지 이미지, blanks의 bbox | 가린 이미지 | PDF 처리 |
-| `pipeline` | 위 함수들 | 페이지별 최종 결과(1.4) | 공동 |
+| `select` | 페이지 tokens, 후보 id, 정책, `ask_llm`, 직전 실패 사유(재시도 때), 피할 token id(같은 문서의 이전 세트에서 쓴 것) | `{spans: [[token id…]], 칸별 type·hint·variants, source: gemini / rule}` | LLM·검증 |
+| `gate` | 페이지 tokens, select 결과, 정책 | `{blanks, 탈락 칸과 사유, quality, passed}`. blanks마다 `order`(페이지 안 읽는 순서: 줄 → x좌표), `answer_group`(**같은 페이지 안**에서 같은 정답인 칸끼리), 토큰에서 가져온 글자 크기·색을 채운다 | LLM·검증 |
+| `redact` | 페이지 이미지, blanks의 bbox | 가린 이미지, 칸마다 칠한 색(`style.bg_color`로 들어감). 빈칸이 없어도 가린 이미지를 만든다 | PDF 처리 |
+| `pipeline.prepare` | PDF 바이트 | 문서 추출 결과(페이지별 page 정보·이미지·tokens). 워커는 이것을 L2로 저장한다 | 공동 |
+| `pipeline.build` | 문서 추출 결과(새로 만든 것 또는 저장된 것), 정책, `ask_llm`, 건너뛸 페이지 번호, 저장된 분석 결과(있으면), 피할 token id | 페이지별 결과(1.4)를 **한 페이지씩 차례로 내보낸다.** 워커는 받는 대로 저장한다(L4) | 공동 |
+
+`pipeline`을 `prepare`와 `build` 둘로 나눈 이유: 추출 결과를 저장했다가 다시 만들기에서 재사용하고(L2), 재실행 때 끝난 페이지를 건너뛰려면(L4) 워커가 중간에 끼어들 수 있어야 하기 때문이다.
 
 `filter`가 문서 전체를 받는 이유: 머리글·바닥글은 여러 페이지에서 같은 위치에 반복되는 글로 판정하므로 한 페이지만 봐서는 알 수 없다.
 
@@ -47,7 +50,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 |---|---|---|---|
 | `LLMTransientError` | 429·5xx·타임아웃이 infra 재시도(3회) 뒤에도 계속됨 | 잡지 않고 올려 보낸다 | 작업 재실행(끝난 페이지는 건너뜀) |
 | `LLMInvalidResponse` | 응답을 파싱할 수 없거나 스키마와 다름 | 검증 실패로 취급: 사유를 붙여 1회 재시도 → 규칙 기반 | 계속 진행 |
-| `LLMPermanentError` | 인증 실패, 설정 오류, 없는 모델 | 잡지 않고 올려 보낸다 | 작업이 잡아 `failed` + 사유로 기록하고 정상 종료(재시도하지 않음) |
+| `LLMPermanentError` | 인증 실패, 설정 오류, 없는 모델 | 그 세트의 남은 페이지는 LLM을 부르지 않고 규칙 기반으로 만든다. 분석이면 기본 방식 | 계속 진행. 운영 경보를 즉시 보낸다 |
 
 ### 1.4 페이지 결과(최종 출력)
 
@@ -87,7 +90,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 
 모든 ID는 무작위 UUID다. 작업 ID와 빈칸 세트 ID는 같다(ADR-006).
 
-**중복 요청 방지:** 세트를 만드는 두 요청(`POST /documents`, `POST /documents/{id}/blank-sets`)은 `Idempotency-Key` 헤더를 받는다. 클라이언트가 사용자 동작 한 번마다 UUID 하나를 만들어 보내고, 같은 키로 다시 오면 서버는 새로 만들지 않고 기존 세트를 돌려준다. 다시 만들기의 seed는 서버가 무작위로 정하므로, seed로는 중복 클릭을 막을 수 없기 때문이다.
+**중복 요청 방지:** 세트를 만드는 두 요청(`POST /documents`, `POST /documents/{id}/blank-sets`)은 `Idempotency-Key` 헤더를 받는다. 클라이언트가 사용자 동작 한 번마다 UUID 하나를 만들어 보내고, 같은 키로 다시 오면 서버는 새로 만들지 않고 기존 세트를 돌려준다. 다시 만들기의 seed는 서버가 무작위로 정하므로, seed로는 중복 클릭을 막을 수 없기 때문이다. 같은 키에 **다른 내용**(다른 파일, 다른 방식)이 오면 `invalid_request`로 거절한다. 이를 위해 요청 내용의 지문(파일 sha256과 방식)을 세트에 함께 저장한다.
 
 | API | 요청 | 성공 응답 |
 |---|---|---|
@@ -97,7 +100,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `GET /blank-sets/{id}` | — | `200` 아래 예시. 폴링 겸용 |
 | `POST /blank-sets/{id}/attempts` | `{answers: {blank_id: 입력}}` | `200` `{attempt_id, results: {blank_id: correct / near / wrong}, score, after_reveal}`. 횟수 제한 없음 |
 | `GET /blank-sets/{id}/attempts` | — | `200` 내 시도 목록 `[{attempt_id, submitted_at, score, after_reveal, revealed_at}]`. 처음 풀이와 복습을 나눠 볼 때 쓴다 |
-| `GET /attempts/{id}/reveal` | — | `200` `{answers: {blank_id: 정답}}`. 제출한 시도라면 언제든. 공개 시각을 그 시도에 기록한다 |
+| `POST /attempts/{id}/reveal` | — | `200` `{answers: {blank_id: 정답}}`. 제출한 시도라면 언제든. 공개 시각을 그 시도에 기록하므로 `GET`이 아니다(미리 불러오기나 새로고침으로 공개 기록이 생기지 않게) |
 | `DELETE /documents/{id}` | — | `204`. 삭제 표시(`deleted_at`)를 하고 바로 응답한다. 이후 목록·조회에서 보이지 않고, 세트·빈칸·시도·이미지의 실제 삭제는 정리 작업이 한다 |
 
 `GET /blank-sets/{id}` 응답 예시(완료 시). **정답은 들어 있지 않다.**
@@ -128,7 +131,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `running` | 처리 중 |
 | `done` | 모든 페이지 처리 완료 |
 | `partial` | 끝났지만 일부 페이지가 실패했거나 빈칸 없이 나감 |
-| `failed` | 결과를 낼 수 없음(인식 실패, 영구 오류 등) |
+| `failed` | 결과를 낼 수 없음(글자를 읽지 못함, 실행 횟수 상한 초과, 처리 중 삭제) |
 
 `failed`일 때 `error.code`는 다음 중 하나다. HTTP 오류 코드(3절)와 별개로, 세트가 왜 끝났는지를 나타낸다.
 
@@ -136,7 +139,6 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 |---|---|
 | `unreadable_pdf` | 텍스트도 OCR도 거의 읽지 못함. "인식이 잘 안 됐어요, 다시 올려 주세요" |
 | `processing_failed` | 실행 횟수 상한까지 일시적 오류·제한 시간 초과·워커 중단이 반복됨 |
-| `llm_unavailable` | 인증·설정 같은 영구 오류로 LLM을 쓸 수 없음 |
 | `document_deleted` | 처리 중에 문서가 삭제됨 |
 
 `progress`는 `{done: 처리를 마친 쪽 수, total: 전체 쪽 수}`다. 실패한 쪽도 "마친" 것으로 센다. 그래야 `done = total`이 "작업이 끝났다"와 같은 뜻이 된다.
@@ -175,8 +177,8 @@ users 1─N documents 1─N blank_sets 1─N blanks
 | `users` | id, 외부 로그인 식별자, email, created_at | 인증 방식(아키텍처 2.1)이 정해지기 전이라 최소 필드만 |
 | `documents` | id, owner_id, sha256, 파일명, page_count, 원본 키, created_at, expires_at, deleted_at | `(owner_id, sha256)` 고유는 **삭제 표시가 없는 행에만** 적용한다(부분 고유 인덱스 `WHERE deleted_at IS NULL`). 삭제한 뒤 같은 PDF를 올리면 새 문서가 된다. 처리 상태 필드 없음(업로드 검사는 요청 안에서 끝난다) |
 | `pages` | (document_id, page_no, extract_version), 크기(pt), source, 원본 이미지 키, 토큰 JSON 키 | 같은 추출 버전이면 세트끼리 재사용 |
-| `blank_sets` | id(= 작업 ID), document_id, requested_by, idempotency_key, preset_requested, preset_applied, analysis, seed, model, prompt_version, extract_version, status, progress, run_count, error_code, error_message, created_at, updated_at, finished_at | 상태의 유일한 기준. `(requested_by, idempotency_key)` 고유. `prompt_version`·`extract_version`은 기록용. `run_count`는 실행 횟수, `updated_at`은 진행할 때마다 갱신 |
+| `blank_sets` | id(= 작업 ID), document_id, requested_by, idempotency_key, request_hash, preset_requested, preset_applied, analysis, seed, model, prompt_version, extract_version, status, progress, run_count, error_code, error_message, created_at, updated_at, finished_at | 상태의 유일한 기준. `(requested_by, idempotency_key)` 고유. `prompt_version`·`extract_version`은 기록용. `run_count`는 실행 횟수, `updated_at`은 진행할 때마다 갱신 |
 | `blank_set_pages` | (set_id, page_no), 가린 이미지 키, selection_source, quality | 가린 이미지는 세트마다 다르다. 이 행이 있으면 그 페이지는 처리가 끝난 것(재실행 시 건너뜀) |
-| `blanks` | id(= `blank_id`), set_id, page_no, 순서, bbox, type, hint, style, **answer(서버 전용)**, variants, answer_group | — |
+| `blanks` | id(= `blank_id`), set_id, page_no, 순서, token_ids, bbox, type, hint, style, **answer(서버 전용)**, variants, answer_group | `token_ids`는 다시 만들기에서 "이미 쓴 단어"를 알려 주는 데 쓴다 |
 | `attempts` | id, set_id, user_id, submitted_at, answers, results, score, after_reveal, revealed_at | `after_reveal`: 같은 세트에서 정답을 본 뒤의 시도인지. 처음 풀이와 복습을 나눠 꺼내기 위한 필드 |
 | `llm_calls` | id, set_id, page_no(분석이면 없음), kind(`analyze`/`select`), 시도 번호, model, 결과(`ok`/`invalid`/`transient`/`permanent`), latency_ms, 입력·출력 토큰 수, created_at | 서비스 전체 비용 상한 집계, 운영 지표(지연·비용·실패율)의 원자료 |
