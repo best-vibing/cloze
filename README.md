@@ -22,3 +22,23 @@
 4. **구현되면 코드가 기준이다.** 데이터 모양은 pydantic 모델과 FastAPI가 만드는 OpenAPI 문서가, 한도 값은 설정 파일이 기준이 된다. 그때 문서의 해당 표는 지우고 코드로 링크한다. 상세 설계서는 구현이 진행될수록 줄어드는 것이 정상이다.
 5. **ADR은 고치지 않는다.** 결정이 바뀌면 새 ADR을 쓰고, 옛 ADR의 상태를 "대체됨(ADR-번호)"으로 바꾼다.
 6. 문서를 추가하거나 지우면 위 표도 함께 고친다.
+
+## 개발 환경
+
+Python 버전과 라이브러리 버전은 팀 전체가 같게 쓴다. `uv`가 `.python-version`(3.13)과 `uv.lock`을 보고 똑같이 맞춰 준다.
+
+1. [uv](https://docs.astral.sh/uv/) 설치
+2. `uv sync` — Python 3.13이 없으면 uv가 받아 오고, 잠금 파일 그대로 의존성을 설치한다
+3. `.env.example`을 복사해 `.env`를 만들고 값을 채운다(`.env`는 커밋하지 않는다)
+
+| 명령 | 하는 일 | CI에서도 실행 |
+|---|---|---|
+| `uv run ruff check .` | 린트(순환 복잡도 10 초과도 실패) | 예 |
+| `uv run ruff format .` | 자동 포맷(CI는 `--check`로 확인만) | 예 |
+| `uv run mypy cloze tests` | 타입 검사(strict) | 예 |
+| `uv run bandit -r cloze -q` | 보안 취약점 검사 | 예 |
+| `uv run pytest` | 테스트 | 예 |
+
+PR을 올리면 CI(`.github/workflows/ci.yml`)가 위 다섯 가지를 실행한다. 모두 통과해야 머지한다. 의존성을 추가할 때는 `uv add <패키지>`로 넣어 `uv.lock`도 함께 커밋한다.
+
+수업 PDF 같은 기준 자료는 저작권 때문에 레포에 넣지 않는다. 로컬 폴더에 두고 `CLOZE_SAMPLES_DIR`로 가리킨다. 테스트용으로 직접 만든 작은 PDF만 `tests/fixtures/`에 커밋한다.
