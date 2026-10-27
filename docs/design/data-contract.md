@@ -114,6 +114,8 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 }
 ```
 
+`image_url`은 짧게 만료된다(만료 시간은 [신뢰성 설계](reliability.md) 2절). 이미지를 불러오다 만료로 실패하면 프론트는 `GET /blank-sets/{id}`를 한 번 다시 불러 새 URL을 받는다.
+
 `queued`·`running`일 때는 `pages`가 비어 있고 `progress`만 의미가 있다. `failed`일 때는 `error: {code, message}`가 들어간다.
 
 | `status` | 뜻 |
@@ -123,6 +125,15 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `done` | 모든 페이지 처리 완료 |
 | `partial` | 끝났지만 일부 페이지가 실패했거나 빈칸 없이 나감 |
 | `failed` | 결과를 낼 수 없음(인식 실패, 영구 오류 등) |
+
+`failed`일 때 `error.code`는 다음 중 하나다. HTTP 오류 코드(3절)와 별개로, 세트가 왜 끝났는지를 나타낸다.
+
+| `error.code` | 뜻 |
+|---|---|
+| `unreadable_pdf` | 텍스트도 OCR도 거의 읽지 못함. "인식이 잘 안 됐어요, 다시 올려 주세요" |
+| `processing_failed` | 실행 횟수 상한까지 일시적 오류·제한 시간 초과·워커 중단이 반복됨 |
+| `llm_unavailable` | 인증·설정 같은 영구 오류로 LLM을 쓸 수 없음 |
+| `document_deleted` | 처리 중에 문서가 삭제됨 |
 
 `progress`는 `{done: 처리를 마친 쪽 수, total: 전체 쪽 수}`다. 실패한 쪽도 "마친" 것으로 센다. 그래야 `done = total`이 "작업이 끝났다"와 같은 뜻이 된다.
 
@@ -152,15 +163,17 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 ```
 users 1─N documents 1─N blank_sets 1─N blanks
               │              ├─1─N blank_set_pages
+              │              ├─1─N llm_calls
               └─1─N pages    └─1─N attempts N─1 users
 ```
 
 | 테이블 | 주요 필드 | 메모 |
 |---|---|---|
 | `users` | id, 외부 로그인 식별자, email, created_at | 인증 방식(아키텍처 2.1)이 정해지기 전이라 최소 필드만 |
-| `documents` | id, owner_id, sha256, 파일명, page_count, 원본 키, created_at, expires_at, deleted_at | `(owner_id, sha256)` 고유. 처리 상태 필드 없음(업로드 검사는 요청 안에서 끝난다). `deleted_at`은 삭제 표시 |
-| `pages` | (document_id, page_no), 크기(pt), source, 원본 이미지 키, 토큰 JSON 키 | 문서당 한 번만 만들고 세트끼리 재사용 |
-| `blank_sets` | id(= 작업 ID), document_id, requested_by, idempotency_key, preset_requested, preset_applied, analysis, seed, model, prompt_version, status, progress, error_code, error_message, created_at, finished_at | 상태의 유일한 기준. `(requested_by, idempotency_key)` 고유. `prompt_version`은 기록용 |
+| `documents` | id, owner_id, sha256, 파일명, page_count, 원본 키, created_at, expires_at, deleted_at | `(owner_id, sha256)` 고유는 **삭제 표시가 없는 행에만** 적용한다(부분 고유 인덱스 `WHERE deleted_at IS NULL`). 삭제한 뒤 같은 PDF를 올리면 새 문서가 된다. 처리 상태 필드 없음(업로드 검사는 요청 안에서 끝난다) |
+| `pages` | (document_id, page_no, extract_version), 크기(pt), source, 원본 이미지 키, 토큰 JSON 키 | 같은 추출 버전이면 세트끼리 재사용 |
+| `blank_sets` | id(= 작업 ID), document_id, requested_by, idempotency_key, preset_requested, preset_applied, analysis, seed, model, prompt_version, extract_version, status, progress, run_count, error_code, error_message, created_at, updated_at, finished_at | 상태의 유일한 기준. `(requested_by, idempotency_key)` 고유. `prompt_version`·`extract_version`은 기록용. `run_count`는 실행 횟수, `updated_at`은 진행할 때마다 갱신 |
 | `blank_set_pages` | (set_id, page_no), 가린 이미지 키, selection_source, quality | 가린 이미지는 세트마다 다르다. 이 행이 있으면 그 페이지는 처리가 끝난 것(재실행 시 건너뜀) |
 | `blanks` | id(= `blank_id`), set_id, page_no, 순서, bbox, type, hint, **answer(서버 전용)**, variants, answer_group | — |
 | `attempts` | id, set_id, user_id, submitted_at, answers, results, score | — |
+| `llm_calls` | id, set_id, page_no(분석이면 없음), kind(`analyze`/`select`), 시도 번호, model, 결과(`ok`/`invalid`/`transient`/`permanent`), latency_ms, 입력·출력 토큰 수, created_at | 서비스 전체 비용 상한 집계, 운영 지표(지연·비용·실패율)의 원자료 |
