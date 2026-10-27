@@ -33,8 +33,8 @@ taskiq-redis의 브로커 세 종류 가운데 `ListQueueBroker`와 `PubSubBroke
 
 ## 결과
 
-- **작업이 두 번 이상 실행될 수 있다(at-least-once).** 저장을 멱등하게 만들어야 한다(아키텍처 정의서 6.3).
-- **작업 제한 시간 < `idle_timeout`** 규칙이 생긴다. 어기면 살아서 처리 중인 작업이 다른 워커에서 한 번 더 실행된다(아키텍처 정의서 6.2).
+- **작업이 두 번 이상 실행될 수 있다(at-least-once).** 저장을 멱등하게 만들어야 한다([신뢰성 설계](../design/reliability.md) 3절).
+- **작업 제한 시간 < `idle_timeout`** 규칙이 생긴다. 어기면 살아서 처리 중인 작업이 다른 워커에서 한 번 더 실행된다([신뢰성 설계](../design/reliability.md) 2절).
 - 작업 상태의 기준은 Postgres에 둔다. 결과 백엔드는 디버깅용 보조로만 쓴다.
 - 0.x 버전이므로 Taskiq와 taskiq-redis 버전을 고정하고, 올릴 때는 변경 기록을 확인한다.
 
