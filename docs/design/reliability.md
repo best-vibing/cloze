@@ -67,7 +67,6 @@ Stream 방식은 "최소 한 번 실행"이므로 같은 작업이 두 번 돌 �
 | 사용자 하루 사용량 | 하루 처리 쪽수 | 300쪽 | `api`(작업 등록 전) | `daily_limit_exceeded` |
 | 사용자 동시 작업 | 진행 중(`queued`·`running`) 세트 수 | 2개 | `api` | `too_many_running` |
 | 서비스 전체 비용 | 하루 Gemini 호출 수(`llm_calls`의 오늘 기록 + 진행 중 세트의 남은 쪽수) | 실측 후 결정 | `api`(작업 등록 전) | `service_limit_exceeded`로 거절. 처리 도중에 끊지 않도록 등록 단계에서만 막는다 |
-| 채점 | 세트당 사용자별 제출 횟수 | 5회 | `api` | `attempt_limit_exceeded` |
 | 폴링 | 클라이언트 조회 간격 | 2초 | `frontend` | — |
 | 워커 | 프로세스 하나당 동시 작업 | 1개(늘리려면 워커 컨테이너를 늘림) | `worker` 설정 | 큐에서 대기 |
 | 작업 안의 Gemini 호출 | 동시에 보내는 페이지 수 | 4개 | `infra/gemini`(세마포어) | 순서대로 대기 |

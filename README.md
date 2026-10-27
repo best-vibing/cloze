@@ -10,7 +10,8 @@
 | [아키텍처 결정 기록(ADR)](docs/decisions/) | 결정마다 배경·검토한 선택지·결과 | 결정한 사람 |
 | [상세 설계 — 데이터 계약](docs/design/data-contract.md) | core 데이터 모양, API 요청·응답, 오류 코드, 테이블 필드 | 공동 |
 | [상세 설계 — PDF 처리·좌표 추출](docs/design/pdf-extraction.md) | 렌더링, 좌표 규약, 폰트 필드, OCR 경로 | PDF 처리 |
-| [상세 설계 — 단어 선택·자료 분석·품질 게이트](docs/design/selection-and-quality-gate.md) | 자동 모드 분석, 품질 게이트 기준과 보정 절차, 운영 지표 | LLM·검증 |
+| [상세 설계 — 단어 선택·자료 분석·품질 게이트](docs/design/selection-and-quality-gate.md) | 자동 모드 분석, 품질 게이트 기준과 보정 절차, LLM 출력 검증, 프롬프트 입력 형식, 운영 지표 | LLM·검증 |
+| [상세 설계 — 채점·입력칸 표시](docs/design/grading-and-overlay.md) | 채점 판정 순서, 정답 공개·다시 풀기 기록, 입력칸 글자 크기·색과 입력 규칙 | 서버·워커, 프론트 |
 | [상세 설계 — 신뢰성](docs/design/reliability.md) | 실패 담당, 재시도 층, 시간 설정, 멱등성, 한도 | 서버·워커 |
 
 ## 문서 규칙

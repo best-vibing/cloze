@@ -71,6 +71,7 @@ flowchart TB
 | 식별자 | 작업 ID = 빈칸 세트 ID, 모든 ID는 무작위 UUID, 남의 리소스는 404 | 멱등성·상태 조회 키가 하나, 존재 여부를 숨김 → [ADR-006](decisions/ADR-006-ids-and-not-found.md) |
 | 코드 구조 | `cloze/core`는 계산만 하고 바깥(DB·네트워크·큐)을 모른다(3.4) | CLI로 DB 없이 파이프라인 검증, 담당별 병렬 작업 |
 | 재사용 | 같은 사용자 안에서만 문서·추출·세트·페이지 결과를 재사용. 전역 캐시 없음(3.5) | 비용 절감. 사용자 간 공유는 프라이버시·저작권 위험 |
+| 정답 공개·다시 풀기 | 제출 횟수와 정답 공개에 제한 없음. 시도마다 정답을 본 뒤인지 기록해 처음 풀이와 복습을 나눠 본다. 다른 빈칸은 원할 때 다시 만들기로 | 복습도 학습이다. 기록을 남기면 제한 없이도 학습 경과를 볼 수 있다 |
 | 비용 상한 | 서비스 전체 하루 Gemini 호출 상한을 넘으면 작업을 등록하지 않고 거절 | 핵심 기능 개발에 집중. 상한 초과 시 품질을 낮춰 계속 처리하는 방식은 채택하지 않음 |
 | 실패 처리 | 검증 실패 → 오류 붙여 1회 재시도 → 규칙 기반 선택기로 폴백 | Gemini 장애에도 서비스가 멈추지 않음 |
 | 제작 방식 선택 | 업로드할 때 함께 고른다. 자동(기본)과 프리셋 4종(어휘 문맥, 개념 용어, 수치·날짜, 정의) | 작업 하나·상태 한 벌 구조 유지 → [ADR-004](decisions/ADR-004-preset-at-upload.md) |
@@ -104,11 +105,12 @@ flowchart TB
 | `POST /documents/{id}/blank-sets` | 다른 방식이나 새 seed로 다시 만들기. 같은 요청 키(`Idempotency-Key`)면 기존 세트 ID를 돌려줌 | Postgres(쓰기), Redis(작업 등록) |
 | `GET /documents` | 내 문서 목록과 세트 요약 | Postgres(읽기) |
 | `GET /blank-sets/{id}` | 상태·진행률(폴링 겸용). 완료되면 빈칸 목록(`blank_id`, bbox, type, hint), 가린 이미지의 서명 URL, 적용된 방식과 이유. **정답은 포함하지 않음** | Postgres(읽기), 서명 URL 생성 |
-| `POST /blank-sets/{id}/attempts` | 전체 답안 일괄 제출 → 칸별 결과·점수, 오답 기록. 시도 횟수 제한 | Postgres(읽기·쓰기) |
-| `GET /attempts/{id}/reveal` | 제출 후에만 정답 공개 | Postgres(읽기) |
+| `POST /blank-sets/{id}/attempts` | 전체 답안 일괄 제출 → 칸별 결과·점수 기록. 횟수 제한 없음, 정답을 본 뒤의 시도인지 함께 기록 | Postgres(읽기·쓰기) |
+| `GET /blank-sets/{id}/attempts` | 내 시도 목록(처음 풀이와 복습 구분) | Postgres(읽기) |
+| `GET /attempts/{id}/reveal` | 제출한 시도의 정답 공개. 공개 시각 기록 | Postgres(읽기·쓰기) |
 | `DELETE /documents/{id}` | 삭제 표시 후 응답. 실제 삭제는 정리 작업 | Postgres, Storage |
 
-인증과 한도 검사는 모든 API 앞단의 공통 의존성으로 둔다. 요청·응답 모양, 오류 형식과 코드 목록은 [데이터 계약](design/data-contract.md).
+인증과 한도 검사는 모든 API 앞단의 공통 의존성으로 둔다. 요청·응답 모양, 오류 형식과 코드 목록은 [데이터 계약](design/data-contract.md). 채점 규칙과 입력칸 표시는 [채점·입력칸 표시](design/grading-and-overlay.md).
 
 ### 3.2 Taskiq 워커
 - 실행: API와 같은 패키지, 별도 컨테이너. 메모리 제한을 건다(PDF 파서 격리).
@@ -156,6 +158,7 @@ cloze/
     select/    선택기: gemini(프롬프트·응답 해석), rule
     gate       형식 검증·품질 게이트·정답 생성
     redact     래스터 채우기                            Pillow
+    grade      채점 판정(정규화·변형·숫자·근사 일치)
     pipeline   위 단계를 페이지 단위로 호출, 재시도·폴백 흐름
   infra/       바깥과 연결
     gemini     실제 API 호출, 타임아웃, 동시 호출 상한   google-genai
@@ -181,7 +184,7 @@ tests/         직접 만든 작은 PDF만 커밋. 기준 PDF 세트는 CLOZE_SA
 |---|---|
 | PDF 처리 | `core/extract`, `core/redact` |
 | LLM·검증 | `core/select`, `core/analyze`, `core/gate` |
-| 서버·워커 | `infra`, `worker`, `api` |
+| 서버·워커 | `infra`, `worker`, `api`, `core/grade` |
 | 프론트 | `frontend` |
 | 공동 소유 | `core/models`(데이터 계약), `core/errors`, `core/pipeline`. 바꿀 때는 PR 리뷰 필수 |
 
@@ -219,7 +222,7 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 6. 정답·좌표는 Postgres, 이미지는 Storage에 멱등 저장. 상태 `done` 또는 `partial`(일부 페이지 실패).
 7. 워커가 ack.
 8. 브라우저는 상태 조회 API를 폴링하다가 완료되면 문제 조회 API로 빈칸 목록과 서명 URL을 받고, 이미지는 Storage에서 직접 받는다.
-9. 전체 답안 제출 → 채점 API가 Postgres의 정답과 비교 → 결과·오답 기록 → 제출 후에만 정답 공개.
+9. 전체 답안 제출 → 채점 API가 Postgres의 정답과 비교 → 결과 기록 → 원하면 정답 공개 → 다시 풀기(같은 칸) 또는 다시 만들기(다른 칸).
 
 ### 5.2 상태 값
 `queued` → `running` → `done` / `partial` / `failed`. `failed`일 때는 사용자에게 사유(예: "인식이 잘 안 됐어요, 다시 올려 주세요")를 함께 저장한다. 품질 게이트를 끝내 통과하지 못해 빈칸 없이 내보낸 페이지가 있으면 `partial`로 둔다.

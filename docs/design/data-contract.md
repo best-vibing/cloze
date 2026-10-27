@@ -63,7 +63,8 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
   ],
   "blanks": [
     {"token_ids": [12], "answer": "Mitochondria", "bbox": [0.115, 0.305, 0.295, 0.355],
-     "type": "term", "hint": "세포 소기관", "variants": [], "answer_group": null}
+     "type": "term", "hint": "세포 소기관", "variants": [], "answer_group": null,
+     "style": {"font_size_ratio": 0.025, "font_color": "#1a1a1a", "bg_color": "#ffffff"}}
   ],
   "selection": {"source": "gemini", "attempts": 1, "quality": {"survival_ratio": 0.8}}
 }
@@ -79,6 +80,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `conf` | 인식 신뢰도. 텍스트 레이어는 1.0 |
 | `blanks[].bbox` | 묶인 토큰 bbox의 합집합 + 패딩 |
 | `blanks[].type` | `text`, `number`, `term` |
+| `blanks[].style` | 입력칸 표시 정보(글자 크기 비율·글자색·배경색). [채점·입력칸 표시](grading-and-overlay.md) 3.1 |
 | `selection.source` | `gemini`, `fallback`(규칙 기반), `none`(게이트 미달로 빈칸 없음) |
 
 ## 2. API
@@ -93,8 +95,9 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `POST /documents/{id}/blank-sets` | `{preset}`. 헤더 `Idempotency-Key` | `202` `{blank_set_id}`. 같은 요청 키면 기존 세트 ID |
 | `GET /documents` | — | `200` 내 문서 목록, 문서마다 세트 요약(`blank_set_id`, `preset_applied`, `status`, `created_at`) |
 | `GET /blank-sets/{id}` | — | `200` 아래 예시. 폴링 겸용 |
-| `POST /blank-sets/{id}/attempts` | `{answers: {blank_id: 입력}}` | `200` `{attempt_id, results: {blank_id: correct / near / wrong}, score}` |
-| `GET /attempts/{id}/reveal` | — | `200` `{answers: {blank_id: 정답}}`. 제출한 시도에 대해서만 |
+| `POST /blank-sets/{id}/attempts` | `{answers: {blank_id: 입력}}` | `200` `{attempt_id, results: {blank_id: correct / near / wrong}, score, after_reveal}`. 횟수 제한 없음 |
+| `GET /blank-sets/{id}/attempts` | — | `200` 내 시도 목록 `[{attempt_id, submitted_at, score, after_reveal, revealed_at}]`. 처음 풀이와 복습을 나눠 볼 때 쓴다 |
+| `GET /attempts/{id}/reveal` | — | `200` `{answers: {blank_id: 정답}}`. 제출한 시도라면 언제든. 공개 시각을 그 시도에 기록한다 |
 | `DELETE /documents/{id}` | — | `204`. 삭제 표시(`deleted_at`)를 하고 바로 응답한다. 이후 목록·조회에서 보이지 않고, 세트·빈칸·시도·이미지의 실제 삭제는 정리 작업이 한다 |
 
 `GET /blank-sets/{id}` 응답 예시(완료 시). **정답은 들어 있지 않다.**
@@ -109,7 +112,8 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
   "preset_reason": "강의 슬라이드로 보여 개념 용어 방식을 골랐어요",
   "pages": [
     {"page_no": 1, "image_url": "https://…(짧게 만료되는 서명 URL)", "width_pt": 720, "height_pt": 540,
-     "blanks": [{"blank_id": "9a2e…", "bbox": [0.115, 0.305, 0.295, 0.355], "type": "term", "hint": "세포 소기관"}]}
+     "blanks": [{"blank_id": "9a2e…", "order": 1, "bbox": [0.115, 0.305, 0.295, 0.355], "type": "term", "hint": "세포 소기관",
+                 "style": {"font_size_ratio": 0.025, "font_color": "#1a1a1a", "bg_color": "#ffffff"}}]}
   ]
 }
 ```
@@ -153,7 +157,6 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `too_many_pages` | 422 | 쪽수 상한 초과 |
 | `daily_limit_exceeded` | 429 | 사용자 하루 처리 쪽수 초과 |
 | `too_many_running` | 429 | 사용자의 진행 중 세트 수 초과 |
-| `attempt_limit_exceeded` | 429 | 세트당 제출 횟수 초과 |
 | `service_limit_exceeded` | 503 | 서비스 전체의 하루 Gemini 호출 상한 초과. 작업을 등록하지 않고 거절한다 |
 
 한도의 초기값은 [신뢰성 설계](reliability.md) 5절에 둔다.
@@ -174,6 +177,6 @@ users 1─N documents 1─N blank_sets 1─N blanks
 | `pages` | (document_id, page_no, extract_version), 크기(pt), source, 원본 이미지 키, 토큰 JSON 키 | 같은 추출 버전이면 세트끼리 재사용 |
 | `blank_sets` | id(= 작업 ID), document_id, requested_by, idempotency_key, preset_requested, preset_applied, analysis, seed, model, prompt_version, extract_version, status, progress, run_count, error_code, error_message, created_at, updated_at, finished_at | 상태의 유일한 기준. `(requested_by, idempotency_key)` 고유. `prompt_version`·`extract_version`은 기록용. `run_count`는 실행 횟수, `updated_at`은 진행할 때마다 갱신 |
 | `blank_set_pages` | (set_id, page_no), 가린 이미지 키, selection_source, quality | 가린 이미지는 세트마다 다르다. 이 행이 있으면 그 페이지는 처리가 끝난 것(재실행 시 건너뜀) |
-| `blanks` | id(= `blank_id`), set_id, page_no, 순서, bbox, type, hint, **answer(서버 전용)**, variants, answer_group | — |
-| `attempts` | id, set_id, user_id, submitted_at, answers, results, score | — |
+| `blanks` | id(= `blank_id`), set_id, page_no, 순서, bbox, type, hint, style, **answer(서버 전용)**, variants, answer_group | — |
+| `attempts` | id, set_id, user_id, submitted_at, answers, results, score, after_reveal, revealed_at | `after_reveal`: 같은 세트에서 정답을 본 뒤의 시도인지. 처음 풀이와 복습을 나눠 꺼내기 위한 필드 |
 | `llm_calls` | id, set_id, page_no(분석이면 없음), kind(`analyze`/`select`), 시도 번호, model, 결과(`ok`/`invalid`/`transient`/`permanent`), latency_ms, 입력·출력 토큰 수, created_at | 서비스 전체 비용 상한 집계, 운영 지표(지연·비용·실패율)의 원자료 |
