@@ -1,13 +1,14 @@
 """규칙 기반 선택기. 신호별 점수를 가중합해 빈칸으로 만들 토큰을 고른다."""
 
 import math
+import random
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from cloze.core.filter import word_key
-from cloze.core.models import PageCandidates, PageTokens, Token
+from cloze.core.models import PageCandidates, PageTokens, Policy, Selection, Slot, Token
 
 # [가설] 신호별 가중치. 합은 1이다. 실데이터로 보정한다(selection-and-quality-gate.md 2.5절).
 WEIGHT_SIZE = 0.35
@@ -19,6 +20,9 @@ SIZE_RATIO_CAP = 2.0
 # [가설] 문서의 줄 중 글자 크기 상위 이 비율을 제목급으로 본다.
 HEADING_LINE_RATIO = 0.1
 BOLD_MARKERS = ("BOLD", "BLACK", "HEAVY")
+MAX_PER_LINE = 2
+# 부동소수 오차가 동점을 깨지 않도록 점수를 이 자릿수로 반올림해 비교한다.
+SCORE_DIGITS = 9
 
 
 @dataclass(frozen=True)
@@ -90,3 +94,44 @@ def score_token(token: Token, page_median: float, stats: DocStats) -> float:
         + WEIGHT_HEADING * heading_signal(token, stats)
         + WEIGHT_FREQUENCY * frequency_signal(token, stats)
     )
+
+
+def select_rule(
+    page: PageTokens,
+    candidates: PageCandidates,
+    policy: Policy,
+    avoid: set[int],
+    doc_stats: DocStats,
+) -> Selection:
+    """칸 하나는 토큰 하나다. 프리셋은 아직 concept뿐이라 preset 값으로 갈라지지 않는다."""
+    target = round(len(page.tokens) * policy.density / 100)
+    ranked = _rank(page, candidates, policy.seed, doc_stats)
+    # avoid에 든 토큰을 뒤로 보내, 후보가 모자랄 때만 다시 쓰이게 한다.
+    fresh = [token for token in ranked if token.id not in avoid]
+    reused = [token for token in ranked if token.id in avoid]
+    ids = sorted(token.id for token in _pick([*fresh, *reused], target))
+    return Selection(spans=[[id_] for id_ in ids], slots=[Slot() for _ in ids], source="rule")
+
+
+def _rank(page: PageTokens, candidates: PageCandidates, seed: int, stats: DocStats) -> list[Token]:
+    allowed = set(candidates.candidate_ids)
+    tokens = [token for token in page.tokens if token.id in allowed]
+    if not tokens:
+        return []
+    median = statistics.median(token.font_size for token in page.tokens)
+    # 보안 용도가 아니라, 같은 입력에 같은 결과를 내면서 동점 순서만 정하는 난수다.
+    random.Random(seed).shuffle(tokens)  # nosec B311
+    return sorted(tokens, key=lambda token: -round(score_token(token, median, stats), SCORE_DIGITS))
+
+
+def _pick(ranked: list[Token], target: int) -> list[Token]:
+    chosen: list[Token] = []
+    per_line: Counter[int] = Counter()
+    seen: set[str] = set()
+    for token in ranked:
+        key = word_key(token.text)
+        if len(chosen) < target and per_line[token.line_id] < MAX_PER_LINE and key not in seen:
+            chosen.append(token)
+            per_line[token.line_id] += 1
+            seen.add(key)
+    return chosen
