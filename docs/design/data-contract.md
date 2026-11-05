@@ -58,11 +58,12 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 
 ```json
 {
-  "schema_version": 0,
+  "schema_version": 1,
   "page": {"page_no": 3, "width_pt": 720, "height_pt": 540, "source": "textlayer"},
   "tokens": [
     {"id": 12, "text": "Mitochondria", "bbox": [0.12, 0.31, 0.29, 0.35],
-     "line_id": 4, "block_id": 1, "font_size": 18.0, "font_color": "#1a1a1a", "conf": 1.0}
+     "line_id": 4, "block_id": 1, "font_size": 18.0, "fontname": "Helvetica-Bold",
+     "font_color": "#1a1a1a", "conf": 1.0}
   ],
   "blanks": [
     {"token_ids": [12], "answer": "Mitochondria", "bbox": [0.115, 0.305, 0.295, 0.355],
@@ -80,6 +81,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `tokens[].id` | 페이지 안에서만 고유한 정수. LLM에는 이 id로 보내고 이 id로 받는다 |
 | `bbox` | `[x0, y0, x1, y1]`, 페이지 기준 0~1, 좌상단 원점 |
 | `line_id`, `block_id` | 같은 줄·같은 문단 판정용. 품질 게이트의 "주변 문맥"과 구 연속성 검사에 쓴다 |
+| `fontname` | 폰트 이름. 규칙 기반 선택기가 굵은 글씨를 판정할 때 쓴다 |
 | `conf` | 인식 신뢰도. 텍스트 레이어는 1.0 |
 | `blanks[].bbox` | 묶인 토큰 bbox의 합집합 + 패딩 |
 | `blanks[].type` | `text`, `number`, `term` |
