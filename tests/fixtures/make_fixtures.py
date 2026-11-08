@@ -88,13 +88,16 @@ def _render_runs(title: str) -> list[Run]:
 _HIDDEN: Run = (REGULAR, 12, 10, 40, "Hidden")
 _CROP = b" /CropBox [50 100 562 742]"
 
-# 렌더링·좌표 정합 확인용: 흰 배경, 연노랑 배경, 90도 회전, MediaBox와 다른 CropBox, 회전+CropBox.
+# 렌더링·좌표 정합 확인용: 흰 배경, 연노랑 배경, 90도 회전, MediaBox와 다른 CropBox,
+# 회전+CropBox, 180도 회전, 270도 회전.
 RENDER_PAGES: list[PageSpec] = [
     (b"", b"", _render_runs("White Page")),
     (b"", _YELLOW_FILL, _render_runs("Yellow Page")),
     (b" /Rotate 90", b"", _render_runs("Rotated Page")),
     (_CROP, b"", [*_render_runs("Cropped Page"), _HIDDEN]),
     (b" /Rotate 90" + _CROP, b"", [*_render_runs("Rotated Crop"), _HIDDEN]),
+    (b" /Rotate 180", b"", _render_runs("Upside Down")),
+    (b" /Rotate 270", b"", _render_runs("Rotated Left")),
 ]
 
 

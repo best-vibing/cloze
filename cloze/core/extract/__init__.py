@@ -1,19 +1,40 @@
 """PDF에서 토큰을 뽑는다. 좌표 규약은 docs/design/pdf-extraction.md 2절이다."""
 
 import io
-from typing import Any
+from collections import Counter
+from collections.abc import Callable
+from typing import Any, Literal
 
 import pdfplumber
 from pdfplumber.page import Page
+from pdfplumber.utils.text import WordExtractor
 
 from cloze.core.models import BBox, PageInfo, PageTokens, Token
 
 # 렌더링 크기·이미지 형식·좌표 계산이 바뀌면 올린다(pdf-extraction.md 3절).
 EXTRACT_VERSION = 1
-# [가설] top 차이가 이 값(pt) 이하이면 같은 줄로 본다.
+# [가설] 읽는 방향으로 본 top 차이가 이 값(pt) 이하이면 같은 줄로 본다.
 LINE_TOLERANCE_PT = 3.0
 
 type Frame = tuple[float, float, float, float]  # x0, top, x1, bottom (pt)
+type Word = dict[str, Any]
+type Dir = Literal["ltr", "rtl", "ttb", "btt"]
+
+EXTRA_ATTRS = ["size", "fontname"]
+# 화면에서 본 글자 진행 방향(도, 시계 방향)별 (글자 방향, 줄이 쌓이는 방향).
+_WORD_DIRECTIONS: dict[int, tuple[Dir, Dir]] = {
+    0: ("ltr", "ttb"),
+    90: ("ttb", "rtl"),
+    180: ("rtl", "btt"),
+    270: ("btt", "ltr"),
+}
+# 화면 좌표의 박스를 "읽기 좌표"(글이 왼쪽→오른쪽, 줄이 위→아래로 가는 좌표)로 바꾼다.
+_READING: dict[int, Callable[[float, float, float, float], Frame]] = {
+    0: lambda x0, top, x1, bottom: (x0, top, x1, bottom),
+    90: lambda x0, top, x1, bottom: (top, -x1, bottom, -x0),
+    180: lambda x0, top, x1, bottom: (-x1, -bottom, -x0, -top),
+    270: lambda x0, top, x1, bottom: (-bottom, x0, -top, x1),
+}
 
 
 def extract_tokens(pdf: bytes) -> list[PageTokens]:
@@ -24,14 +45,26 @@ def extract_tokens(pdf: bytes) -> list[PageTokens]:
 def _page_tokens(page_no: int, page: Page) -> PageTokens:
     frame = _visible_frame(page)
     # 보이는 영역과 겹치는 글자만 남긴다. 좌표는 원래 페이지 기준 그대로다.
-    words = page.crop(frame).extract_words(extra_attrs=["size", "fontname"])
-    ordered = sorted(_with_line_ids(words), key=lambda item: (item[0], float(item[1]["x0"])))
+    chars = [_with_font_size(char) for char in page.crop(frame).chars]
+    direction = _page_direction(chars)
+    words = _word_extractor(direction).extract_words(chars)
+    ordered = _in_reading_order([(_READING[direction](*_box(word)), word) for word in words])
     tokens = [
         _token(token_id, line_id, word, frame) for token_id, (line_id, word) in enumerate(ordered)
     ]
     width, height = frame[2] - frame[0], frame[3] - frame[1]
     info = PageInfo(page_no=page_no, width_pt=width, height_pt=height)
     return PageTokens(page=info, tokens=tokens)
+
+
+def _word_extractor(direction: int) -> WordExtractor:
+    """0·180도 글자는 pdfplumber가 upright로, 90·270도 글자는 rotated로 다룬다."""
+    char_dir, line_dir = _WORD_DIRECTIONS[direction]
+    if direction in (90, 270):
+        return WordExtractor(
+            extra_attrs=EXTRA_ATTRS, char_dir_rotated=char_dir, line_dir_rotated=line_dir
+        )
+    return WordExtractor(extra_attrs=EXTRA_ATTRS, char_dir=char_dir, line_dir=line_dir)
 
 
 def _visible_frame(page: Page) -> Frame:
@@ -46,21 +79,45 @@ def _visible_frame(page: Page) -> Frame:
     )
 
 
-def _with_line_ids(words: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any]]]:
-    """top이 가까운 단어끼리 같은 줄로 묶는다. 기준은 그 줄의 첫 단어다."""
+def _with_font_size(char: dict[str, Any]) -> dict[str, Any]:
+    """옆으로 누운 글자는 pdfplumber의 size가 글자 폭이라, 가로 길이(= 글자 크기)로 바꾼다."""
+    if char["upright"]:
+        return char
+    return {**char, "size": round(float(char["x1"]) - float(char["x0"]), 2)}
+
+
+def _page_direction(chars: list[dict[str, Any]]) -> int:
+    """글자가 가장 많이 향한 방향. 글자가 없으면 0이다."""
+    counts = Counter(_char_direction(char) for char in chars)
+    return counts.most_common(1)[0][0] if counts else 0
+
+
+def _char_direction(char: dict[str, Any]) -> int:
+    # matrix의 (a, b)는 PDF 좌표(위가 +)에서 글자가 나아가는 방향이다.
+    a, b = (float(value) for value in char["matrix"][:2])
+    if abs(a) >= abs(b):
+        return 0 if a > 0 else 180
+    return 90 if b < 0 else 270
+
+
+def _box(word: Word) -> Frame:
+    return (float(word["x0"]), float(word["top"]), float(word["x1"]), float(word["bottom"]))
+
+
+def _in_reading_order(placed: list[tuple[Frame, Word]]) -> list[tuple[int, Word]]:
+    """읽기 좌표의 top이 가까운 단어끼리 같은 줄로 묶고, 줄 → 읽기 x 순서로 정렬한다."""
     line_id = -1
     line_top = float("-inf")
-    grouped: list[tuple[int, dict[str, Any]]] = []
-    for word in sorted(words, key=lambda item: float(item["top"])):
-        top = float(word["top"])
-        if top - line_top > LINE_TOLERANCE_PT:
+    lined: list[tuple[int, float, Word]] = []
+    for box, word in sorted(placed, key=lambda item: item[0][1]):
+        if box[1] - line_top > LINE_TOLERANCE_PT:
             line_id += 1
-            line_top = top
-        grouped.append((line_id, word))
-    return grouped
+            line_top = box[1]
+        lined.append((line_id, box[0], word))
+    return [(line, word) for line, _, word in sorted(lined, key=lambda item: item[:2])]
 
 
-def _token(token_id: int, line_id: int, word: dict[str, Any], frame: Frame) -> Token:
+def _token(token_id: int, line_id: int, word: Word, frame: Frame) -> Token:
     return Token(
         id=token_id,
         text=str(word["text"]),
@@ -71,7 +128,7 @@ def _token(token_id: int, line_id: int, word: dict[str, Any], frame: Frame) -> T
     )
 
 
-def _normalized_bbox(word: dict[str, Any], frame: Frame) -> BBox:
+def _normalized_bbox(word: Word, frame: Frame) -> BBox:
     """보이는 영역의 좌상단을 원점으로 0~1로 바꾼다."""
     left, top, right, bottom = frame
     width, height = right - left, bottom - top
