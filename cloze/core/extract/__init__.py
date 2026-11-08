@@ -1,7 +1,7 @@
 """PDF에서 토큰을 뽑는다. 좌표 규약은 docs/design/pdf-extraction.md 2절이다."""
 
 import io
-from collections import Counter
+from collections import defaultdict
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -46,9 +46,7 @@ def _page_tokens(page_no: int, page: Page) -> PageTokens:
     frame = _visible_frame(page)
     # 보이는 영역과 겹치는 글자만 남긴다. 좌표는 원래 페이지 기준 그대로다.
     chars = [_with_font_size(char) for char in page.crop(frame).chars]
-    direction = _page_direction(chars)
-    words = _word_extractor(direction).extract_words(chars)
-    ordered = _in_reading_order([(_READING[direction](*_box(word)), word) for word in words])
+    ordered = _ordered_words(chars)
     tokens = [
         _token(token_id, line_id, word, frame) for token_id, (line_id, word) in enumerate(ordered)
     ]
@@ -86,10 +84,25 @@ def _with_font_size(char: dict[str, Any]) -> dict[str, Any]:
     return {**char, "size": round(float(char["x1"]) - float(char["x0"]), 2)}
 
 
-def _page_direction(chars: list[dict[str, Any]]) -> int:
-    """글자가 가장 많이 향한 방향. 글자가 없으면 0이다."""
-    counts = Counter(_char_direction(char) for char in chars)
-    return counts.most_common(1)[0][0] if counts else 0
+def _ordered_words(chars: list[dict[str, Any]]) -> list[tuple[int, Word]]:
+    """글자를 진행 방향별로 나눠 단어를 만들고, 글자가 많은 방향(같으면 각도가 작은 방향)부터
+    이어 붙인다. line_id는 앞 그룹에 이어서 0부터 연속으로 매긴다."""
+    groups: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for char in chars:
+        groups[_char_direction(char)].append(char)
+    ordered: list[tuple[int, Word]] = []
+    for direction in sorted(groups, key=lambda key: (-len(groups[key]), key)):
+        next_line = max((line for line, _ in ordered), default=-1) + 1
+        ordered += [
+            (next_line + line, word) for line, word in _group_words(direction, groups[direction])
+        ]
+    return ordered
+
+
+def _group_words(direction: int, chars: list[dict[str, Any]]) -> list[tuple[int, Word]]:
+    """한 방향의 글자로 단어를 만들고, 그 방향의 읽기 좌표로 줄을 묶어 정렬한다."""
+    words = _word_extractor(direction).extract_words(chars)
+    return _in_reading_order([(_READING[direction](*_box(word)), word) for word in words])
 
 
 def _char_direction(char: dict[str, Any]) -> int:

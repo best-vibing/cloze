@@ -20,6 +20,7 @@ TITLES = {
     ROTATED_LEFT: "Rotated Left",
 }
 MIXED = 8  # 가로 글 사이에 세로 글("Sideways Label")이 섞인 페이지
+FLIPPED_MIX = 9  # 직립 글 사이에 180도 뒤집힌 글("Flipped Note")이 섞인 페이지
 DARK = 100  # 회색조 값이 이보다 작으면 글자 픽셀로 본다.
 
 
@@ -90,7 +91,6 @@ def _is_vertical(token: Token, page: PageTokens) -> bool:
 
 def test_mixed_direction_page_covers_vertical_glyphs(pages: list[PageTokens]) -> None:
     # 방향이 섞여도 예외 없이 뽑히고, 소수 방향(세로) 글자의 bbox도 실제 글자를 덮는다.
-    # 줄·순서·글자 순서는 어긋날 수 있다(pdf-extraction.md "남은 확인 사항").
     page = pages[MIXED - 1]
     image = render_page(RENDER_PDF, MIXED)
     vertical = [token for token in page.tokens if _is_vertical(token, page)]
@@ -103,6 +103,26 @@ def test_mixed_direction_page_covers_vertical_glyphs(pages: list[PageTokens]) ->
         "Target",
         "Corner",
     ]
+
+
+@pytest.mark.parametrize(
+    ("page_no", "minority"), [(MIXED, ["Sideways", "Label"]), (FLIPPED_MIX, ["Flipped", "Note"])]
+)
+def test_minority_direction_words_read_in_order(
+    pages: list[PageTokens], page_no: int, minority: list[str]
+) -> None:
+    # 소수 방향 단어도 원문 순서대로 읽히고, 자기들끼리 한 줄로 묶이며 다수 방향 줄과 섞이지 않는다.
+    tokens = pages[page_no - 1].tokens
+    assert [token.text for token in tokens[-2:]] == minority
+    assert tokens[-2].line_id == tokens[-1].line_id
+    assert tokens[-1].line_id not in {token.line_id for token in tokens[:-2]}
+    assert [token.id for token in tokens] == list(range(len(tokens)))
+    assert sorted({token.line_id for token in tokens}) == list(range(tokens[-1].line_id + 1))
+
+
+def test_flipped_words_cover_rendered_glyphs(pages: list[PageTokens]) -> None:
+    image = render_page(RENDER_PDF, FLIPPED_MIX)
+    assert all(dark_ratio(image, token.bbox) > 0.1 for token in pages[FLIPPED_MIX - 1].tokens)
 
 
 def test_cropped_page_uses_visible_area(pages: list[PageTokens]) -> None:
