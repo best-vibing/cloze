@@ -8,7 +8,7 @@ from cloze.core.extract.render import DEBUG_COLOR, draw_boxes, pixel_box, render
 from cloze.core.models import BBox, PageTokens
 
 RENDER_PDF = (Path(__file__).parent / "fixtures" / "render.pdf").read_bytes()
-WHITE, YELLOW, ROTATED, CROPPED = 1, 2, 3, 4
+WHITE, YELLOW, ROTATED, CROPPED, ROTATED_CROP = 1, 2, 3, 4, 5
 DARK = 100  # 회색조 값이 이보다 작으면 글자 픽셀로 본다.
 
 
@@ -26,7 +26,7 @@ def _word_box(page: PageTokens, text: str) -> BBox:
     return next(token.bbox for token in page.tokens if token.text == text)
 
 
-@pytest.mark.parametrize("page_no", [WHITE, YELLOW, ROTATED])
+@pytest.mark.parametrize("page_no", [WHITE, YELLOW, ROTATED, CROPPED, ROTATED_CROP])
 def test_image_matches_page_size(pages: list[PageTokens], page_no: int) -> None:
     info = pages[page_no - 1].page
     image = render_page(RENDER_PDF, page_no)
@@ -47,7 +47,7 @@ def test_long_side_is_configurable() -> None:
     assert max(render_page(RENDER_PDF, WHITE, long_side_px=500).size) == 500
 
 
-@pytest.mark.parametrize("page_no", [WHITE, YELLOW])
+@pytest.mark.parametrize("page_no", [WHITE, YELLOW, CROPPED])
 @pytest.mark.parametrize("word", ["Target", "Corner"])
 def test_word_boxes_cover_rendered_glyphs(pages: list[PageTokens], page_no: int, word: str) -> None:
     image = render_page(RENDER_PDF, page_no)
@@ -57,13 +57,27 @@ def test_word_boxes_cover_rendered_glyphs(pages: list[PageTokens], page_no: int,
     assert dark_ratio(image, shifted) == 0.0
 
 
-def test_rotated_page_boxes_cover_rendered_glyphs(pages: list[PageTokens]) -> None:
+@pytest.mark.parametrize("page_no", [ROTATED, ROTATED_CROP])
+def test_rotated_page_boxes_cover_rendered_glyphs(pages: list[PageTokens], page_no: int) -> None:
     # 회전 페이지는 토큰이 한 글자씩 갈라지므로(아래 xfail) 글자 토큰마다 확인한다.
-    image = render_page(RENDER_PDF, ROTATED)
-    tokens = pages[ROTATED - 1].tokens
-    assert "".join(token.text for token in tokens).count("T") >= 1
+    image = render_page(RENDER_PDF, page_no)
+    tokens = pages[page_no - 1].tokens
     assert len(tokens) >= len("RotatedPageTargetCorner") // 2
     assert all(dark_ratio(image, token.bbox) > 0.05 for token in tokens)
+
+
+def test_cropped_page_uses_visible_area(pages: list[PageTokens]) -> None:
+    # pypdfium2는 CropBox만 그리므로 좌표·크기도 CropBox 기준이어야 한다.
+    for page_no, size in [(CROPPED, (512, 642)), (ROTATED_CROP, (642, 512))]:
+        info = pages[page_no - 1].page
+        assert (info.width_pt, info.height_pt) == size
+
+
+@pytest.mark.parametrize("page_no", [CROPPED, ROTATED_CROP])
+def test_text_outside_cropbox_is_not_a_token(pages: list[PageTokens], page_no: int) -> None:
+    texts = "".join(token.text for token in pages[page_no - 1].tokens)
+    assert "Hidden" not in texts
+    assert "H" not in texts
 
 
 @pytest.mark.xfail(
@@ -72,15 +86,6 @@ def test_rotated_page_boxes_cover_rendered_glyphs(pages: list[PageTokens]) -> No
 )
 def test_rotated_page_keeps_words(pages: list[PageTokens]) -> None:
     assert "Target" in {token.text for token in pages[ROTATED - 1].tokens}
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="pdfplumber는 MediaBox, pypdfium2는 CropBox 기준이라 어긋난다. 보정 여부는 결정 필요",
-)
-def test_cropped_page_boxes_cover_rendered_glyphs(pages: list[PageTokens]) -> None:
-    image = render_page(RENDER_PDF, CROPPED)
-    assert dark_ratio(image, _word_box(pages[CROPPED - 1], "Target")) > 0.1
 
 
 def test_pixel_box_rounds_outward() -> None:
