@@ -13,6 +13,8 @@ EXTRACT_VERSION = 1
 # [가설] top 차이가 이 값(pt) 이하이면 같은 줄로 본다.
 LINE_TOLERANCE_PT = 3.0
 
+type Frame = tuple[float, float, float, float]  # x0, top, x1, bottom (pt)
+
 
 def extract_tokens(pdf: bytes) -> list[PageTokens]:
     with pdfplumber.open(io.BytesIO(pdf)) as document:
@@ -20,15 +22,28 @@ def extract_tokens(pdf: bytes) -> list[PageTokens]:
 
 
 def _page_tokens(page_no: int, page: Page) -> PageTokens:
-    width, height = float(page.width), float(page.height)
-    words = page.extract_words(extra_attrs=["size", "fontname"])
+    frame = _visible_frame(page)
+    # 보이는 영역과 겹치는 글자만 남긴다. 좌표는 원래 페이지 기준 그대로다.
+    words = page.crop(frame).extract_words(extra_attrs=["size", "fontname"])
     ordered = sorted(_with_line_ids(words), key=lambda item: (item[0], float(item[1]["x0"])))
     tokens = [
-        _token(token_id, line_id, word, width, height)
-        for token_id, (line_id, word) in enumerate(ordered)
+        _token(token_id, line_id, word, frame) for token_id, (line_id, word) in enumerate(ordered)
     ]
+    width, height = frame[2] - frame[0], frame[3] - frame[1]
     info = PageInfo(page_no=page_no, width_pt=width, height_pt=height)
     return PageTokens(page=info, tokens=tokens)
+
+
+def _visible_frame(page: Page) -> Frame:
+    """pypdfium2가 그리는 영역: CropBox와 MediaBox의 교집합(pt, 위쪽 기준, 회전 반영)."""
+    crop = [float(value) for value in page.cropbox]
+    full = [float(value) for value in page.bbox]
+    return (
+        max(crop[0], full[0]),
+        max(crop[1], full[1]),
+        min(crop[2], full[2]),
+        min(crop[3], full[3]),
+    )
 
 
 def _with_line_ids(words: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any]]]:
@@ -45,23 +60,26 @@ def _with_line_ids(words: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any
     return grouped
 
 
-def _token(token_id: int, line_id: int, word: dict[str, Any], width: float, height: float) -> Token:
+def _token(token_id: int, line_id: int, word: dict[str, Any], frame: Frame) -> Token:
     return Token(
         id=token_id,
         text=str(word["text"]),
-        bbox=_normalized_bbox(word, width, height),
+        bbox=_normalized_bbox(word, frame),
         line_id=line_id,
         font_size=float(word["size"]),
         fontname=str(word["fontname"]),
     )
 
 
-def _normalized_bbox(word: dict[str, Any], width: float, height: float) -> BBox:
+def _normalized_bbox(word: dict[str, Any], frame: Frame) -> BBox:
+    """보이는 영역의 좌상단을 원점으로 0~1로 바꾼다."""
+    left, top, right, bottom = frame
+    width, height = right - left, bottom - top
     return (
-        _unit(float(word["x0"]) / width),
-        _unit(float(word["top"]) / height),
-        _unit(float(word["x1"]) / width),
-        _unit(float(word["bottom"]) / height),
+        _unit((float(word["x0"]) - left) / width),
+        _unit((float(word["top"]) - top) / height),
+        _unit((float(word["x1"]) - left) / width),
+        _unit((float(word["bottom"]) - top) / height),
     )
 
 

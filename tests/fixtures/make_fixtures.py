@@ -84,12 +84,17 @@ def _render_runs(title: str) -> list[Run]:
     ]
 
 
-# 렌더링·좌표 정합 확인용: 흰 배경, 연노랑 배경, 90도 회전, MediaBox와 다른 CropBox.
+# CropBox 밖이라 화면에 보이지 않는 글. 토큰으로 뽑히면 안 된다.
+_HIDDEN: Run = (REGULAR, 12, 10, 40, "Hidden")
+_CROP = b" /CropBox [50 100 562 742]"
+
+# 렌더링·좌표 정합 확인용: 흰 배경, 연노랑 배경, 90도 회전, MediaBox와 다른 CropBox, 회전+CropBox.
 RENDER_PAGES: list[PageSpec] = [
     (b"", b"", _render_runs("White Page")),
     (b"", _YELLOW_FILL, _render_runs("Yellow Page")),
     (b" /Rotate 90", b"", _render_runs("Rotated Page")),
-    (b" /CropBox [50 100 562 742]", b"", _render_runs("Cropped Page")),
+    (_CROP, b"", [*_render_runs("Cropped Page"), _HIDDEN]),
+    (b" /Rotate 90" + _CROP, b"", [*_render_runs("Rotated Crop"), _HIDDEN]),
 ]
 
 
