@@ -1,4 +1,4 @@
-"""tests/fixtures/sample.pdf를 표준 라이브러리만으로 만든다.
+"""tests/fixtures/의 sample.pdf와 render.pdf를 표준 라이브러리만으로 만든다.
 
 실행: uv run python tests/fixtures/make_fixtures.py
 """
@@ -70,31 +70,66 @@ def _show(run: Run) -> bytes:
     return f"BT /{font} {size} Tf {x} {y} Td {shown} Tj ET\n".encode("ascii")
 
 
-def _objects() -> list[bytes]:
+type PageSpec = tuple[bytes, bytes, list[Run]]  # 페이지 사전에 더할 항목, 그리기 명령, 글
+
+YELLOW_RGB = (255, 255, 204)
+_YELLOW_FILL = b"1 1 0.8 rg 0 0 612 792 re f 0 0 0 rg\n"
+
+
+def _render_runs(title: str) -> list[Run]:
+    return [
+        (BOLD, 24, 72, 700, title),
+        (REGULAR, 18, 72, 600, "Target"),
+        (REGULAR, 18, 300, 200, "Corner"),
+    ]
+
+
+# 렌더링·좌표 정합 확인용: 흰 배경, 연노랑 배경, 90도 회전, MediaBox와 다른 CropBox.
+RENDER_PAGES: list[PageSpec] = [
+    (b"", b"", _render_runs("White Page")),
+    (b"", _YELLOW_FILL, _render_runs("Yellow Page")),
+    (b" /Rotate 90", b"", _render_runs("Rotated Page")),
+    (b" /CropBox [50 100 562 742]", b"", _render_runs("Cropped Page")),
+]
+
+
+def _sample_pages() -> list[PageSpec]:
+    return [(b"", b"", [*_frame(no), *runs]) for no, runs in enumerate(PAGES, start=1)]
+
+
+def _objects(pages: list[PageSpec]) -> list[bytes]:
     font_ids = {name: 3 + index for index, (name, _) in enumerate(FONTS)}
     first_page_id = 3 + len(FONTS)
-    page_ids = [first_page_id + 2 * index for index in range(len(PAGES))]
+    page_ids = [first_page_id + 2 * index for index in range(len(pages))]
     kids = b" ".join(b"%d 0 R" % page_id for page_id in page_ids)
     fonts = b" ".join(b"/%s %d 0 R" % (name.encode(), id_) for name, id_ in font_ids.items())
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [%s] /Count %d >>" % (kids, len(PAGES)),
+        b"<< /Type /Pages /Kids [%s] /Count %d >>" % (kids, len(pages)),
         *[body for _, body in FONTS],
     ]
-    for page_no, (page_id, runs) in enumerate(zip(page_ids, PAGES, strict=True), start=1):
-        stream = b"".join(_show(run) for run in [*_frame(page_no), *runs])
+    for page_id, (extra, drawing, runs) in zip(page_ids, pages, strict=True):
+        stream = drawing + b"".join(_show(run) for run in runs)
         objects.append(
-            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R "
-            b"/Resources << /Font << %s >> >> >>" % (page_id + 1, fonts)
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]%s /Contents %d 0 R "
+            b"/Resources << /Font << %s >> >> >>" % (extra, page_id + 1, fonts)
         )
         objects.append(b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream))
     return objects
 
 
 def build_sample_pdf() -> bytes:
+    return _build(_sample_pages())
+
+
+def build_render_pdf() -> bytes:
+    return _build(RENDER_PAGES)
+
+
+def _build(pages: list[PageSpec]) -> bytes:
     # 머리말의 NUL 바이트: git이 이 파일을 이진으로 보게 해 줄바꿈 변환(autocrlf)을 막는다.
     out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\x00\n")
-    objects = _objects()
+    objects = _objects(pages)
     offsets = []
     for number, body in enumerate(objects, start=1):
         offsets.append(len(out))
@@ -109,3 +144,4 @@ def build_sample_pdf() -> bytes:
 
 if __name__ == "__main__":
     Path(__file__).with_name("sample.pdf").write_bytes(build_sample_pdf())
+    Path(__file__).with_name("render.pdf").write_bytes(build_render_pdf())
