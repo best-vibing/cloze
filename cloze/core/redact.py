@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageStat
 from cloze.core.extract.render import PixelBox, pixel_box
 from cloze.core.models import BBox, PageTokens
 
-# [가설] 패딩: 묶인 토큰 bbox 높이(줄 높이)에 이 비율을 곱해 사방에 더한다.
+# [가설] 패딩: 줄 높이(묶인 토큰 중 가장 큰 글자 크기)에 이 비율을 곱해 사방에 더한다.
 PAD_RATIO = 0.15
 # [가설] 배경색을 잴 박스 바깥 띠의 두께(px). 긴 변 2000px 렌더링 기준이다.
 BAND_PX = 3
@@ -28,13 +28,14 @@ class RedactResult:
 
 def blank_bbox(page: PageTokens, span: list[int], pad_ratio: float = PAD_RATIO) -> BBox:
     """묶인 토큰 bbox의 합집합에 패딩을 더하고 0~1로 자른다. gate가 생기면 그쪽으로 옮긴다."""
-    boxes = [token.bbox for token in page.tokens if token.id in set(span)]
-    if not boxes:
+    tokens = [token for token in page.tokens if token.id in set(span)]
+    if not tokens:
         raise ValueError(f"span {span}에 해당하는 토큰이 없다")
-    x0, y0 = min(box[0] for box in boxes), min(box[1] for box in boxes)
-    x1, y1 = max(box[2] for box in boxes), max(box[3] for box in boxes)
+    x0, y0 = min(t.bbox[0] for t in tokens), min(t.bbox[1] for t in tokens)
+    x1, y1 = max(t.bbox[2] for t in tokens), max(t.bbox[3] for t in tokens)
+    # 줄 높이는 bbox 높이가 아니라 글자 크기로 잰다. 세로로 쓰인(회전) 글은 bbox 높이가 단어 길이다.
     # 패딩은 포인트로 정한 뒤 가로·세로 비율에 맞게 나눈다. 그래야 사방 두께가 같다.
-    pad_pt = (y1 - y0) * page.page.height_pt * pad_ratio
+    pad_pt = max(token.font_size for token in tokens) * pad_ratio
     pad_x, pad_y = pad_pt / page.page.width_pt, pad_pt / page.page.height_pt
     return (_unit(x0 - pad_x), _unit(y0 - pad_y), _unit(x1 + pad_x), _unit(y1 + pad_y))
 

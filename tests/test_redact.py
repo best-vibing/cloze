@@ -38,9 +38,17 @@ def _dark_count(image: Image.Image) -> int:
 def test_blank_bbox_unions_tokens_and_pads_evenly() -> None:
     page = _page([(0.1, 0.5, 0.2, 0.6), (0.25, 0.5, 0.4, 0.6), (0.7, 0.1, 0.8, 0.2)])
     x0, y0, x1, y1 = blank_bbox(page, [0, 1], pad_ratio=0.1)
-    pad_pt = 0.1 * 800 * 0.1
+    pad_pt = 12 * 0.1  # 글자 크기 12pt 기준
     assert (x0, x1) == pytest.approx((0.1 - pad_pt / 600, 0.4 + pad_pt / 600))
     assert (y0, y1) == pytest.approx((0.5 - pad_pt / 800, 0.6 + pad_pt / 800))
+
+
+def test_vertical_word_gets_same_padding_as_horizontal() -> None:
+    # 회전 페이지의 세로 단어도 bbox 길이와 상관없이 글자 크기 기준으로 같은 두께가 붙는다.
+    page = _page([(0.1, 0.1, 0.4, 0.12), (0.5, 0.1, 0.52, 0.4)])
+    flat, tall = blank_bbox(page, [0], pad_ratio=0.5), blank_bbox(page, [1], pad_ratio=0.5)
+    assert 0.1 - flat[1] == pytest.approx(0.1 - tall[1])
+    assert 0.5 - tall[0] == pytest.approx(0.1 - flat[0])
 
 
 def test_blank_bbox_is_clipped_to_page() -> None:
