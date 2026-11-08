@@ -10,11 +10,11 @@ from cloze.core.models import BBox, PageTokens
 
 # [가설] 패딩: 줄 높이(묶인 토큰 중 가장 큰 글자 크기)에 이 비율을 곱해 사방에 더한다.
 PAD_RATIO = 0.15
-# [가설] 배경색을 잴 박스 바깥 띠의 두께(px). 긴 변 2000px 렌더링 기준이다.
+# [가설] 배경색을 잴 박스 바깥 띠의 두께(px). long_side_px=2000 기준이다.
 BAND_PX = 3
 # [가설] WebP 품질(pdf-extraction.md 3절).
 WEBP_QUALITY = 85
-# 띠에서 샘플을 하나도 얻지 못하면(박스가 이미지를 덮거나 띠가 다른 박스뿐일 때) 쓰는 색.
+# 띠에서도, 모든 박스를 뺀 페이지 전체에서도 샘플을 얻지 못할 때(박스가 이미지를 덮을 때) 쓰는 색.
 FALLBACK_COLOR = (255, 255, 255)
 
 type RGB = tuple[int, int, int]
@@ -57,17 +57,26 @@ def encode_webp(image: Image.Image, quality: int = WEBP_QUALITY) -> bytes:
 
 
 def _background(image: Image.Image, box: PixelBox, all_boxes: list[PixelBox]) -> RGB:
-    """박스 바깥 띠의 채널별 중앙값. 띠가 다른 박스(와 자기 박스)와 겹치는 픽셀은 뺀다."""
-    region = _band_region(box, image.size)
+    """박스 바깥 띠의 채널별 중앙값. 띠에서 샘플을 얻지 못하면 모든 박스를 뺀 페이지 전체의
+    중앙값을, 그것도 없으면 FALLBACK_COLOR를 쓴다."""
+    band = _median_outside(image, _band_region(box, image.size), all_boxes)
+    if band is not None:
+        return band
+    page = _median_outside(image, (0, 0, *image.size), all_boxes)
+    return page if page is not None else FALLBACK_COLOR
+
+
+def _median_outside(image: Image.Image, region: PixelBox, boxes: list[PixelBox]) -> RGB | None:
+    """region 안에서 모든 박스(자기 박스 포함)를 뺀 픽셀의 채널별 중앙값. 없으면 None."""
     mask = Image.new("L", (region[2] - region[0], region[3] - region[1]), 255)
     draw = ImageDraw.Draw(mask)
     left, top = region[0], region[1]
-    for x0, y0, x1, y1 in all_boxes:
+    for x0, y0, x1, y1 in boxes:
         # rectangle은 끝 좌표를 포함하므로 1을 뺀다.
         draw.rectangle((x0 - left, y0 - top, x1 - left - 1, y1 - top - 1), fill=0)
     stat = ImageStat.Stat(image.crop(region), mask)
     if stat.count[0] == 0:
-        return FALLBACK_COLOR
+        return None
     red, green, blue = (int(value) for value in stat.median[:3])
     return (red, green, blue)
 

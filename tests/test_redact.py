@@ -2,7 +2,7 @@ import io
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageStat
 
 from cloze.core.extract import extract_tokens
 from cloze.core.extract.render import pixel_box, render_page
@@ -124,3 +124,37 @@ def test_webp_does_not_leak_answer_glyphs() -> None:
         x0, y0, x1, y1 = pixel_box(box, image.size)
         # 손실 압축은 경계에서 번질 수 있어 가장자리 2px을 뺀 안쪽을 본다.
         assert _dark_count(decoded.crop((x0 + 2, y0 + 2, x1 - 2, y1 - 2))) == 0
+
+
+# [가설] WebP 손실 압축 뒤 칸 안 픽셀 중앙값과 bg_color의 채널별 허용 차이.
+WEBP_COLOR_TOLERANCE = 4
+
+
+def _yellow_page() -> tuple[PageTokens, Image.Image]:
+    return extract_tokens(RENDER_PDF)[1], render_page(RENDER_PDF, 2)
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    return (int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16))
+
+
+def test_empty_band_falls_back_to_page_background() -> None:
+    # 칸을 감싸는 큰 칸 때문에 띠 샘플이 없으면, 모든 박스를 뺀 페이지 전체의 중앙값(노랑)을 쓴다.
+    page, image = _yellow_page()
+    target = blank_bbox(page, [next(t.id for t in page.tokens if t.text == "Target")])
+    margin = 0.02  # 이미지 폭 1546px 기준 약 31px로, 띠(3px)보다 넓다.
+    outer = (target[0] - margin, target[1] - margin, target[2] + margin, target[3] + margin)
+    colors = redact(image, [target, outer]).colors
+    assert all(abs(got - want) <= 3 for got, want in zip(_rgb(colors[0]), YELLOW_RGB, strict=True))
+    assert colors[0] != "#ffffff"
+
+
+def test_webp_keeps_fill_color_within_tolerance() -> None:
+    page, image = _yellow_page()
+    boxes = [blank_bbox(page, [token.id]) for token in page.tokens]
+    result = redact(image, boxes)
+    decoded = Image.open(io.BytesIO(encode_webp(result.image))).convert("RGB")
+    for box, color in zip(boxes, result.colors, strict=True):
+        median = ImageStat.Stat(decoded.crop(pixel_box(box, decoded.size))).median
+        diffs = [abs(got - want) for got, want in zip(median, _rgb(color), strict=True)]
+        assert max(diffs) <= WEBP_COLOR_TOLERANCE, (color, median)
