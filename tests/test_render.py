@@ -5,7 +5,7 @@ from PIL import Image
 
 from cloze.core.extract import extract_tokens
 from cloze.core.extract.render import DEBUG_COLOR, draw_boxes, pixel_box, render_page
-from cloze.core.models import BBox, PageTokens
+from cloze.core.models import BBox, PageTokens, Token
 
 RENDER_PDF = (Path(__file__).parent / "fixtures" / "render.pdf").read_bytes()
 WHITE, YELLOW, ROTATED, CROPPED, ROTATED_CROP, UPSIDE_DOWN, ROTATED_LEFT = range(1, 8)
@@ -19,6 +19,7 @@ TITLES = {
     UPSIDE_DOWN: "Upside Down",
     ROTATED_LEFT: "Rotated Left",
 }
+MIXED = 8  # 가로 글 사이에 세로 글("Sideways Label")이 섞인 페이지
 DARK = 100  # 회색조 값이 이보다 작으면 글자 픽셀로 본다.
 
 
@@ -79,6 +80,29 @@ def test_shifted_box_misses_glyphs(pages: list[PageTokens], page_no: int) -> Non
     image = render_page(RENDER_PDF, page_no)
     box = _word_box(pages[page_no - 1], "Target")
     assert dark_ratio(image, (box[0], box[1] + 0.1, box[2], box[3] + 0.1)) == 0.0
+
+
+def _is_vertical(token: Token, page: PageTokens) -> bool:
+    width = (token.bbox[2] - token.bbox[0]) * page.page.width_pt
+    height = (token.bbox[3] - token.bbox[1]) * page.page.height_pt
+    return height > width
+
+
+def test_mixed_direction_page_covers_vertical_glyphs(pages: list[PageTokens]) -> None:
+    # 방향이 섞여도 예외 없이 뽑히고, 소수 방향(세로) 글자의 bbox도 실제 글자를 덮는다.
+    # 줄·순서·글자 순서는 어긋날 수 있다(pdf-extraction.md "남은 확인 사항").
+    page = pages[MIXED - 1]
+    image = render_page(RENDER_PDF, MIXED)
+    vertical = [token for token in page.tokens if _is_vertical(token, page)]
+    assert len(vertical) == 2
+    assert all(token.font_size == 14.0 for token in vertical)
+    assert all(dark_ratio(image, token.bbox) > 0.1 for token in page.tokens)
+    assert [t.text for t in page.tokens if not _is_vertical(t, page)] == [
+        "Mixed",
+        "Page",
+        "Target",
+        "Corner",
+    ]
 
 
 def test_cropped_page_uses_visible_area(pages: list[PageTokens]) -> None:

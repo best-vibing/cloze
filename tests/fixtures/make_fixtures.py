@@ -87,9 +87,11 @@ def _render_runs(title: str) -> list[Run]:
 # CropBox 밖이라 화면에 보이지 않는 글. 토큰으로 뽑히면 안 된다.
 _HIDDEN: Run = (REGULAR, 12, 10, 40, "Hidden")
 _CROP = b" /CropBox [50 100 562 742]"
+# 가로 글 사이에 세로로 세운 글(아래→위로 읽힘). 그래프의 세로 축 제목 같은 경우다.
+_SIDEWAYS = b"BT /R 14 Tf 0 1 -1 0 540 250 Tm (Sideways Label) Tj ET\n"
 
 # 렌더링·좌표 정합 확인용: 흰 배경, 연노랑 배경, 90도 회전, MediaBox와 다른 CropBox,
-# 회전+CropBox, 180도 회전, 270도 회전.
+# 회전+CropBox, 180도 회전, 270도 회전, 가로·세로 글 혼합.
 RENDER_PAGES: list[PageSpec] = [
     (b"", b"", _render_runs("White Page")),
     (b"", _YELLOW_FILL, _render_runs("Yellow Page")),
@@ -98,6 +100,7 @@ RENDER_PAGES: list[PageSpec] = [
     (b" /Rotate 90" + _CROP, b"", [*_render_runs("Rotated Crop"), _HIDDEN]),
     (b" /Rotate 180", b"", _render_runs("Upside Down")),
     (b" /Rotate 270", b"", _render_runs("Rotated Left")),
+    (b"", _SIDEWAYS, _render_runs("Mixed Page")),
 ]
 
 

@@ -37,6 +37,12 @@
 
 로드맵 7단계. PaddleOCR 1순위 검토는 그대로. OCR 도구의 라이선스는 7단계 전에 확인한다 [미확인].
 
+## 6. 남은 확인 사항
+
+| 항목 | 상태 |
+|---|---|
+| 한 페이지에 방향이 섞이면 소수 방향 글자의 `line_id`·순서가 어긋남. 페이지 방향은 가장 많은 글자의 방향 하나로 정하기 때문이다. 소수 방향 단어는 글자 순서도 뒤집힐 수 있다(fixture에서 `Sideways` → `syawediS`). bbox는 맞다 | 후속: filter에서 제외 검토 |
+
 ## 출처
 
 - pdfplumber 좌표 규약·글자 필드: https://github.com/jsvine/pdfplumber/blob/stable/README.md
