@@ -8,6 +8,8 @@ from pdfplumber.page import Page
 
 from cloze.core.models import BBox, PageInfo, PageTokens, Token
 
+# 렌더링 크기·이미지 형식·좌표 계산이 바뀌면 올린다(pdf-extraction.md 3절).
+EXTRACT_VERSION = 1
 # [가설] top 차이가 이 값(pt) 이하이면 같은 줄로 본다.
 LINE_TOLERANCE_PT = 3.0
 
