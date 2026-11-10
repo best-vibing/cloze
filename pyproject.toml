@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "google-genai>=2.33",
+    "jsonschema>=4.26,<5",
     "pdfplumber>=0.11.10",
     "pillow>=13.0",
     "pydantic>=2.14",
@@ -19,6 +20,7 @@ dev = [
     "mypy>=1.18",
     "pytest>=9.1",
     "ruff>=0.17",
+    "types-jsonschema>=4.26.0.20261006,<5",
 ]
 
 [build-system]
