@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import secrets
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from typing import Any, Protocol, cast
 
@@ -31,6 +32,10 @@ class GeminiTransport(Protocol):
 
     async def aclose(self) -> None:
         """전송 자원을 해제한다."""
+        ...
+
+    async def count_tokens(self, prompt: str) -> int:
+        """지시문의 토큰 수를 반환한다."""
         ...
 
 
@@ -90,6 +95,11 @@ class _SDKTransport:
         except ValueError:
             raise LLMInvalidResponse("Gemini response text is invalid") from None
 
+    async def count_tokens(self, prompt: str) -> int:
+        """생성과 같은 모델로 SDK의 비동기 토큰 계산을 요청한다."""
+        response = await self._client.models.count_tokens(model=self._model, contents=prompt)
+        return _validated_token_count(response.total_tokens)
+
     async def aclose(self) -> None:
         """SDK의 비동기 HTTP 연결을 해제한다."""
         await self._client.aclose()
@@ -100,6 +110,13 @@ def _classify_api_error(error: errors.APIError) -> Exception:
     if error.code in {408, 429} or 500 <= error.code < 600:
         return LLMTransientError("Gemini service temporarily unavailable")
     return LLMPermanentError("Gemini authentication, model or request configuration failed")
+
+
+def _validated_token_count(total: object) -> int:
+    """누락값, bool, 음수 및 정수가 아닌 토큰 계산값을 거절한다."""
+    if type(total) is not int or total < 0:
+        raise LLMInvalidResponse("Gemini token count must be a non-negative integer")
+    return total
 
 
 def _validator(schema: JSONObject) -> validators.Draft202012Validator:
@@ -190,11 +207,11 @@ class GeminiClient:
                 raise LLMPermanentError("Invalid Gemini request configuration") from None
         return self._transport
 
-    async def _request_once(self, prompt: str, schema: JSONObject, image: Image | None) -> str:
+    async def _request_once[T](self, operation: Callable[[GeminiTransport], Awaitable[T]]) -> T:
         """한 번 전송하고 알려진 외부 오류를 안전한 공통 오류로 변환한다."""
         transport = self._get_transport()
         try:
-            return await transport.generate(prompt, schema, image)
+            return await operation(transport)
         except errors.APIError as error:
             raise _classify_api_error(error) from None
         # google-genai가 aiohttp를 쓰는 환경에서는 해당 예외도 고려해야 한다.
@@ -205,12 +222,12 @@ class GeminiClient:
         except ValueError:
             raise LLMInvalidResponse("Gemini response parsing failed") from None
 
-    async def _request(self, prompt: str, schema: JSONObject, image: Image | None) -> str:
+    async def _request[T](self, operation: Callable[[GeminiTransport], Awaitable[T]]) -> T:
         """일시적 오류만 최초 호출 포함 최대 세 번 시도한다."""
         for attempt in range(3):
             try:
                 async with self._semaphore:
-                    return await self._request_once(prompt, schema, image)
+                    return await self._request_once(operation)
             except LLMTransientError:
                 if attempt == 2:
                     raise LLMTransientError("Gemini request failed after 3 attempts") from None
@@ -237,8 +254,26 @@ class GeminiClient:
         """
         _check_input(prompt, image)
         validator = _validator(schema)
-        raw = await self._request(prompt, schema, image)
+        raw = await self._request(lambda transport: transport.generate(prompt, schema, image))
         return _parse_response(raw, validator)
+
+    async def count_tokens(self, prompt: str) -> int:
+        """설정된 모델로 전체 지시문의 토큰 수를 계산한다.
+
+        Args:
+            prompt: 비어 있지 않은 지시문.
+
+        Returns:
+            0 이상의 정수 토큰 수.
+
+        Raises:
+            LLMPermanentError: 입력 또는 설정이 잘못되었거나 클라이언트가 종료된 경우.
+            LLMTransientError: 일시적 오류가 최초 호출 포함 세 번 지속된 경우.
+            LLMInvalidResponse: 토큰 계산 응답이 유효하지 않은 경우.
+        """
+        _check_input(prompt, None)
+        total = await self._request(lambda transport: transport.count_tokens(prompt))
+        return _validated_token_count(total)
 
     async def aclose(self) -> None:
         """새 요청을 차단하고 진행 중 호출이 끝난 뒤 전송을 한 번 종료한다."""

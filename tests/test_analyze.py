@@ -3,9 +3,11 @@
 import asyncio
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
+from cloze.config import Settings
 from cloze.core.analyze import (
     DOC_TYPES,
     MAX_ANALYSIS_INPUT_CHARS,
@@ -19,6 +21,7 @@ from cloze.core.analyze import (
     select_representative_pages,
 )
 from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransientError
+from cloze.infra.gemini import GeminiClient
 
 
 @pytest.mark.parametrize("count", range(8))
@@ -293,3 +296,37 @@ def test_counter_failure_and_empty_document(error: Exception) -> None:
     assert calls == []
     result = asyncio.run(analyze_document(_analysis_pages(), fake, count_tokens=count))
     assert result["source"] == "default" and len(calls) == 1 and fake.calls == []
+
+
+@pytest.mark.parametrize("total", [4096, 4097, -1])
+def test_gemini_counter_injection(total: int) -> None:
+    """실제 클라이언트 메서드 주입으로 축소 후 생성 또는 오류 폴백을 검증한다."""
+    transport = AsyncMock()
+    transport.count_tokens.side_effect = [total, 4096]
+    transport.generate.return_value = '{"doc_type":"기타","preset":"concept","reason":"설명"}'
+
+    async def run() -> dict[str, str]:
+        """같은 클라이언트의 계산과 생성을 기존 분석 계약에 주입한다."""
+        client = GeminiClient(Settings(**dict[str, Any](_env_file=None)), transport=transport)
+        result = await analyze_document(
+            _analysis_pages(), client.ask_llm, count_tokens=client.count_tokens
+        )
+        await client.aclose()
+        return result
+
+    result = asyncio.run(run())
+    assert result["source"] == ("default" if total < 0 else "llm")
+    assert transport.count_tokens.await_count == (2 if total > 4096 else 1)
+    assert transport.generate.await_count == (0 if total < 0 else 1)
+    _assert_counted_prompt_is_generated(transport, total)
+
+
+def _assert_counted_prompt_is_generated(transport: AsyncMock, total: int) -> None:
+    """계산 성공 시 마지막으로 계산한 입력이 생성에도 전달되는지 검증한다.
+
+    Args:
+        transport: 계산 및 생성 호출을 기록한 전송 대역.
+        total: 첫 토큰 계산 응답값.
+    """
+    if total >= 0:
+        assert transport.generate.call_args.args[0] == transport.count_tokens.call_args.args[0]
