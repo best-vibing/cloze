@@ -12,8 +12,9 @@ from google import genai
 from google.genai import errors, types
 from jsonschema import exceptions, validators
 from PIL.Image import Image
-from referencing import Registry
+from referencing import Registry, Resource
 from referencing.exceptions import Unresolvable
+from referencing.jsonschema import DRAFT202012
 
 from cloze.config import Settings
 from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransientError
@@ -51,12 +52,11 @@ class _SDKTransport:
 
     def __init__(self, settings: Settings) -> None:
         """키와 설정을 확인하고 네트워크 호출 없이 SDK를 준비한다."""
-        try:
-            key = settings.gemini_api_key_file.read_text(encoding="utf-8-sig").strip()
-        except (OSError, UnicodeError):
-            raise LLMPermanentError("Gemini API key file cannot be read") from None
+        if settings.gemini_api_key is None:
+            raise LLMPermanentError("CLOZE_GEMINI_API_KEY is required")
+        key = settings.gemini_api_key.get_secret_value().strip()
         if not key:
-            raise LLMPermanentError("Gemini API key file must not be empty")
+            raise LLMPermanentError("CLOZE_GEMINI_API_KEY must not be empty")
         self._client = genai.Client(api_key=key, http_options=_http_options(settings)).aio
         self._model = settings.gemini_model
 
@@ -74,14 +74,21 @@ class _SDKTransport:
         contents: list[types.PartUnion] = [prompt]
         if image is not None:
             contents.append(image)
+        try:
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json", response_json_schema=schema
+            )
+        except ValueError:
+            raise LLMPermanentError("Invalid Gemini request configuration") from None
         response = await self._client.models.generate_content(
             model=self._model,
             contents=contents,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json", response_json_schema=schema
-            ),
+            config=config,
         )
-        return response.text or ""
+        try:
+            return response.text or ""
+        except ValueError:
+            raise LLMInvalidResponse("Gemini response text is invalid") from None
 
     async def aclose(self) -> None:
         """SDK의 비동기 HTTP 연결을 해제한다."""
@@ -101,7 +108,24 @@ def _validator(schema: JSONObject) -> validators.Draft202012Validator:
         validators.Draft202012Validator.check_schema(schema)
     except exceptions.SchemaError:
         raise LLMPermanentError("Invalid response JSON Schema") from None
-    return validators.Draft202012Validator(schema, registry=Registry())
+    resource = Resource.from_contents(schema, default_specification=DRAFT202012)
+    registry: Registry[Any] = Registry().with_resource("", resource)
+    _check_references(resource, registry.resolver())
+    return validators.Draft202012Validator(schema, registry=registry)
+
+
+def _check_references(resource: Resource[Any], resolver: Any) -> None:
+    """스키마 위치의 참조를 전송 전에 검사하며 외부 자원을 가져오지 않는다."""
+    resolver = resolver.in_subresource(resource)
+    for keyword in ("$ref", "$dynamicRef"):
+        reference = resource.contents.get(keyword) if isinstance(resource.contents, dict) else None
+        if reference is not None:
+            try:
+                resolver.lookup(reference)
+            except Unresolvable:
+                raise LLMPermanentError("Unresolvable response schema reference") from None
+    for child in resource.subresources():
+        _check_references(child, resolver)
 
 
 def _reject_constant(value: str) -> None:
@@ -140,7 +164,7 @@ def _check_input(prompt: str, image: Image | None) -> None:
 class GeminiClient:
     """하나의 이벤트 루프에서 재사용할 호출 제한과 전송 수명을 관리한다.
 
-    여러 호출은 같은 인스턴스를 공유해야 동시 상한 4가 적용된다.
+    여러 호출은 같은 인스턴스를 공유해야 설정된 동시 상한이 적용된다.
     종료는 진행 중 호출을 기다리며, 종료가 취소되면 aclose를 다시 호출할 수 있다.
     """
 
@@ -150,32 +174,43 @@ class GeminiClient:
         """설정과 선택적 테스트 전송을 보관한다. 키는 아직 검사하지 않는다."""
         self._settings = settings if settings is not None else Settings()
         self._transport = transport
-        self._semaphore = asyncio.Semaphore(4)
+        self._max_concurrency = self._settings.gemini_max_concurrency
+        self._semaphore = asyncio.Semaphore(self._max_concurrency)
         self._close_lock = asyncio.Lock()
         self._closed = False
 
     def _get_transport(self) -> GeminiTransport:
         """첫 실제 요청 때만 SDK 전송을 만든다."""
+        if self._closed:
+            raise LLMPermanentError("Gemini client is closed")
         if self._transport is None:
-            self._transport = _SDKTransport(self._settings)
+            try:
+                self._transport = _SDKTransport(self._settings)
+            except ValueError:
+                raise LLMPermanentError("Invalid Gemini request configuration") from None
         return self._transport
 
     async def _request_once(self, prompt: str, schema: JSONObject, image: Image | None) -> str:
         """한 번 전송하고 알려진 외부 오류를 안전한 공통 오류로 변환한다."""
+        transport = self._get_transport()
         try:
-            return await self._get_transport().generate(prompt, schema, image)
+            return await transport.generate(prompt, schema, image)
         except errors.APIError as error:
             raise _classify_api_error(error) from None
+        # google-genai가 aiohttp를 쓰는 환경에서는 해당 예외도 고려해야 한다.
         except (httpx.TransportError, TimeoutError):
             raise LLMTransientError("Gemini transport temporarily unavailable") from None
+        # 요청 설정 오류는 전송 어댑터가 구성 단계에서 영구 오류로 변환한다.
+        # 응답 디코딩·검증 오류(JSONDecodeError, ValidationError 포함)는 ValueError다.
         except ValueError:
-            raise LLMPermanentError("Invalid Gemini request configuration") from None
+            raise LLMInvalidResponse("Gemini response parsing failed") from None
 
     async def _request(self, prompt: str, schema: JSONObject, image: Image | None) -> str:
         """일시적 오류만 최초 호출 포함 최대 세 번 시도한다."""
         for attempt in range(3):
             try:
-                return await self._request_once(prompt, schema, image)
+                async with self._semaphore:
+                    return await self._request_once(prompt, schema, image)
             except LLMTransientError:
                 if attempt == 2:
                     raise LLMTransientError("Gemini request failed after 3 attempts") from None
@@ -185,7 +220,7 @@ class GeminiClient:
     async def ask_llm(
         self, prompt: str, schema: JSONObject, image: Image | None = None
     ) -> JSONObject:
-        """최대 네 호출 안에서 응답을 받아 검증된 dict를 반환한다.
+        """설정된 동시 호출 상한 안에서 응답을 받아 검증된 dict를 반환한다.
 
         Args:
             prompt: 비어 있지 않은 지시문.
@@ -202,18 +237,15 @@ class GeminiClient:
         """
         _check_input(prompt, image)
         validator = _validator(schema)
-        async with self._semaphore:
-            if self._closed:
-                raise LLMPermanentError("Gemini client is closed")
-            raw = await self._request(prompt, schema, image)
-            return _parse_response(raw, validator)
+        raw = await self._request(prompt, schema, image)
+        return _parse_response(raw, validator)
 
     async def aclose(self) -> None:
         """새 요청을 차단하고 진행 중 호출이 끝난 뒤 전송을 한 번 종료한다."""
         async with self._close_lock:
             self._closed = True
             async with AsyncExitStack() as stack:
-                for _ in range(4):
+                for _ in range(self._max_concurrency):
                     await stack.enter_async_context(self._semaphore)
                 if self._transport is not None:
                     await self._transport.aclose()
