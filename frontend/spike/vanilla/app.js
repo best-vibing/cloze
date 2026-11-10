@@ -109,11 +109,15 @@ function createFakeServer(pages) {
   let attemptNo = 0;
   return {
     async submitAttempt(given) {
+      await new Promise((r) => setTimeout(r, 300)); // 실제 서버처럼 응답에 시간이 걸린다
       const results = {};
       for (const [id, blank] of answers) results[id] = judge(given[id] ?? "", blank);
       const correct = Object.values(results).filter((v) => v === "correct").length;
       attemptNo += 1;
       return { attempt_id: `fake-${attemptNo}`, results, score: correct / answers.size };
+    },
+    get attemptCount() {
+      return attemptNo; // 스파이크 확인용: 제출이 몇 번 들어왔나
     },
   };
 }
@@ -169,15 +173,39 @@ function renderPage(page, measure) {
   return box;
 }
 
+// ---- 한글 조합(IME) 보호 ---------------------------------------------------------
+// 조합 중(compositionstart~compositionend)에 누른 Enter·Tab은 글자만 확정하고 이동하지 않는다.
+// 크롬 등은 조합을 끝낸 Enter를 확정 직후 "보통 Enter"로 한 번 더 보낸다. 그 키도 막는다.
+const IME_RELEASE_MS = 100; // keyup이 오지 않을 때(창 전환 등) 막기를 푸는 시간
+const ime = { composing: false, justEnded: false, timer: 0 };
+
+function trackComposition() {
+  document.addEventListener("compositionstart", () => {
+    ime.composing = true;
+  });
+  document.addEventListener("compositionend", () => {
+    ime.composing = false;
+    ime.justEnded = true; // 같은 키를 놓을 때(keyup)까지 이동을 막는다
+    clearTimeout(ime.timer);
+    ime.timer = setTimeout(() => (ime.justEnded = false), IME_RELEASE_MS);
+  });
+  document.addEventListener("keyup", () => {
+    ime.justEnded = false;
+  });
+}
+
+function blockedByIme(event) {
+  return event.isComposing || event.keyCode === 229 || ime.composing || ime.justEnded;
+}
+
 /**
  * Enter는 다음 빈칸, Shift+Enter는 이전 빈칸. 마지막 빈칸에서 Enter를 누르면 정답을 확인한다.
- * 한글 조합 중에는 Enter·Tab 이동을 막는다.
+ * 한글 조합 중이거나 조합을 막 끝낸 Enter·Tab은 막는다.
  */
 function onKeydown(event, submit) {
   const input = event.target;
   if (!input.classList?.contains("blank")) return;
-  const composing = event.isComposing || event.keyCode === 229;
-  if (composing && (event.key === "Enter" || event.key === "Tab")) {
+  if ((event.key === "Enter" || event.key === "Tab") && blockedByIme(event)) {
     event.preventDefault();
     return;
   }
@@ -192,8 +220,21 @@ function onKeydown(event, submit) {
   all[index + (event.shiftKey ? -1 : 1)]?.focus();
 }
 
-/** 입력값을 모아 채점을 요청하고, 칸마다 결과를 표시한다. */
-async function submitAnswers(server, statusEl) {
+/**
+ * 입력값을 모아 채점을 요청하고, 칸마다 결과를 표시한다.
+ * 응답을 기다리는 동안에는 다시 제출하지 않는다(버튼 연타·Enter 연타로 시도가 두 번 생기지 않게).
+ */
+async function submitAnswers(server, statusEl, button) {
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    await gradeAndShow(server, statusEl);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function gradeAndShow(server, statusEl) {
   const inputs = [...document.querySelectorAll(".blank")];
   const answers = Object.fromEntries(inputs.map((i) => [i.blank.blank_id, i.value]));
   const { results, score } = await server.submitAttempt(answers);
@@ -237,8 +278,11 @@ async function main() {
     pagesEl.append(renderPage(toApiPage(page, f.image), measure));
   }
   const server = createFakeServer(pages);
-  const submit = () => submitAnswers(server, resultEl);
-  document.getElementById("check").addEventListener("click", submit);
+  const checkButton = document.getElementById("check");
+  const submit = () => submitAnswers(server, resultEl, checkButton);
+  checkButton.addEventListener("click", submit);
+  trackComposition();
+  window.spikeServer = server; // 스파이크 확인용(개발자 도구에서 제출 횟수 보기)
   document.addEventListener("keydown", (e) => onKeydown(e, submit));
   document.addEventListener("input", clearResult);
   document.addEventListener("focusin", (e) => showHint(e, hintEl));
