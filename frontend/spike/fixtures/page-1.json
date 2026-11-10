@@ -1,0 +1,641 @@
+{
+  "schema_version": 0,
+  "page": {
+    "page_no": 1,
+    "width_pt": 720,
+    "height_pt": 540,
+    "source": "textlayer"
+  },
+  "tokens": [
+    {
+      "id": 0,
+      "text": "세포의",
+      "bbox": [
+        0.0694,
+        0.1046,
+        0.1861,
+        0.1537
+      ],
+      "line_id": 0,
+      "block_id": 0,
+      "font_size": 28.0,
+      "font_color": "#1f3a93",
+      "conf": 1.0
+    },
+    {
+      "id": 1,
+      "text": "구조와",
+      "bbox": [
+        0.2,
+        0.1046,
+        0.3167,
+        0.1537
+      ],
+      "line_id": 0,
+      "block_id": 0,
+      "font_size": 28.0,
+      "font_color": "#1f3a93",
+      "conf": 1.0
+    },
+    {
+      "id": 2,
+      "text": "기능",
+      "bbox": [
+        0.3306,
+        0.1046,
+        0.4083,
+        0.1537
+      ],
+      "line_id": 0,
+      "block_id": 0,
+      "font_size": 28.0,
+      "font_color": "#1f3a93",
+      "conf": 1.0
+    },
+    {
+      "id": 3,
+      "text": "•",
+      "bbox": [
+        0.0694,
+        0.2259,
+        0.0785,
+        0.2389
+      ],
+      "line_id": 1,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 4,
+      "text": "미토콘드리아",
+      "bbox": [
+        0.0861,
+        0.2139,
+        0.2194,
+        0.2417
+      ],
+      "line_id": 1,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 5,
+      "text": "세포",
+      "bbox": [
+        0.2493,
+        0.2139,
+        0.2938,
+        0.2417
+      ],
+      "line_id": 1,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 6,
+      "text": "호흡으로",
+      "bbox": [
+        0.3014,
+        0.2139,
+        0.3903,
+        0.2407
+      ],
+      "line_id": 1,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 7,
+      "text": "ATP",
+      "bbox": [
+        0.3979,
+        0.2176,
+        0.4368,
+        0.2389
+      ],
+      "line_id": 1,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 8,
+      "text": "만든다",
+      "bbox": [
+        0.4666,
+        0.2139,
+        0.5333,
+        0.2417
+      ],
+      "line_id": 1,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 9,
+      "text": "•",
+      "bbox": [
+        0.0694,
+        0.2907,
+        0.0785,
+        0.3037
+      ],
+      "line_id": 2,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 10,
+      "text": "단백질",
+      "bbox": [
+        0.0861,
+        0.2787,
+        0.1528,
+        0.3065
+      ],
+      "line_id": 2,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 11,
+      "text": "합성은",
+      "bbox": [
+        0.1604,
+        0.2787,
+        0.2271,
+        0.3056
+      ],
+      "line_id": 2,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 12,
+      "text": "리보솜",
+      "bbox": [
+        0.2347,
+        0.2787,
+        0.3014,
+        0.3065
+      ],
+      "line_id": 2,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 13,
+      "text": "일어난다",
+      "bbox": [
+        0.3535,
+        0.2787,
+        0.4424,
+        0.3065
+      ],
+      "line_id": 2,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 14,
+      "text": "•",
+      "bbox": [
+        0.0694,
+        0.3556,
+        0.0785,
+        0.3685
+      ],
+      "line_id": 3,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 15,
+      "text": "Golgi",
+      "bbox": [
+        0.0861,
+        0.3454,
+        0.1389,
+        0.3759
+      ],
+      "line_id": 3,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 16,
+      "text": "apparatus",
+      "bbox": [
+        0.1465,
+        0.3481,
+        0.2465,
+        0.3759
+      ],
+      "line_id": 3,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 17,
+      "text": "packages",
+      "bbox": [
+        0.2542,
+        0.3454,
+        0.3472,
+        0.3759
+      ],
+      "line_id": 3,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 18,
+      "text": "proteins",
+      "bbox": [
+        0.3549,
+        0.3463,
+        0.4368,
+        0.3759
+      ],
+      "line_id": 3,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 19,
+      "text": "for",
+      "bbox": [
+        0.4444,
+        0.3454,
+        0.4722,
+        0.3685
+      ],
+      "line_id": 3,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 20,
+      "text": "secretion",
+      "bbox": [
+        0.4799,
+        0.3463,
+        0.5708,
+        0.3685
+      ],
+      "line_id": 3,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 21,
+      "text": "•",
+      "bbox": [
+        0.0694,
+        0.4204,
+        0.0785,
+        0.4333
+      ],
+      "line_id": 4,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 22,
+      "text": "세포막은",
+      "bbox": [
+        0.0861,
+        0.4083,
+        0.175,
+        0.4361
+      ],
+      "line_id": 4,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 23,
+      "text": "인지질",
+      "bbox": [
+        0.1826,
+        0.4083,
+        0.2493,
+        0.4361
+      ],
+      "line_id": 4,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 24,
+      "text": "이중층으로",
+      "bbox": [
+        0.2569,
+        0.4083,
+        0.3681,
+        0.4361
+      ],
+      "line_id": 4,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 25,
+      "text": "이루어진다",
+      "bbox": [
+        0.3757,
+        0.4083,
+        0.4868,
+        0.4361
+      ],
+      "line_id": 4,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#1a1a1a",
+      "conf": 1.0
+    },
+    {
+      "id": 26,
+      "text": "•",
+      "bbox": [
+        0.0694,
+        0.4852,
+        0.0785,
+        0.4981
+      ],
+      "line_id": 5,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#c0392b",
+      "conf": 1.0
+    },
+    {
+      "id": 27,
+      "text": "로버트",
+      "bbox": [
+        0.0861,
+        0.4731,
+        0.1528,
+        0.5009
+      ],
+      "line_id": 5,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#c0392b",
+      "conf": 1.0
+    },
+    {
+      "id": 28,
+      "text": "훅은",
+      "bbox": [
+        0.1604,
+        0.4731,
+        0.2049,
+        0.5009
+      ],
+      "line_id": 5,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#c0392b",
+      "conf": 1.0
+    },
+    {
+      "id": 29,
+      "text": "1665",
+      "bbox": [
+        0.2125,
+        0.4769,
+        0.2625,
+        0.4981
+      ],
+      "line_id": 5,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#c0392b",
+      "conf": 1.0
+    },
+    {
+      "id": 30,
+      "text": "세포를",
+      "bbox": [
+        0.3146,
+        0.4731,
+        0.3812,
+        0.5009
+      ],
+      "line_id": 5,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#c0392b",
+      "conf": 1.0
+    },
+    {
+      "id": 31,
+      "text": "처음",
+      "bbox": [
+        0.3889,
+        0.4731,
+        0.4333,
+        0.5009
+      ],
+      "line_id": 5,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#c0392b",
+      "conf": 1.0
+    },
+    {
+      "id": 32,
+      "text": "관찰했다",
+      "bbox": [
+        0.441,
+        0.4731,
+        0.5299,
+        0.5009
+      ],
+      "line_id": 5,
+      "block_id": 0,
+      "font_size": 16.0,
+      "font_color": "#c0392b",
+      "conf": 1.0
+    }
+  ],
+  "blanks": [
+    {
+      "token_ids": [
+        4
+      ],
+      "answer": "미토콘드리아",
+      "bbox": [
+        0.0833,
+        0.2102,
+        0.2222,
+        0.2454
+      ],
+      "type": "term",
+      "hint": "세포 소기관",
+      "variants": [],
+      "answer_group": null,
+      "style": {
+        "font_size_ratio": 0.0222,
+        "font_color": "#1a1a1a",
+        "bg_color": "#ffffff"
+      }
+    },
+    {
+      "token_ids": [
+        7
+      ],
+      "answer": "ATP",
+      "bbox": [
+        0.3951,
+        0.2139,
+        0.4396,
+        0.2426
+      ],
+      "type": "term",
+      "hint": null,
+      "variants": [],
+      "answer_group": null,
+      "style": {
+        "font_size_ratio": 0.0222,
+        "font_color": "#1a1a1a",
+        "bg_color": "#ffffff"
+      }
+    },
+    {
+      "token_ids": [
+        12
+      ],
+      "answer": "리보솜",
+      "bbox": [
+        0.2319,
+        0.275,
+        0.3042,
+        0.3102
+      ],
+      "type": "term",
+      "hint": null,
+      "variants": [],
+      "answer_group": null,
+      "style": {
+        "font_size_ratio": 0.0222,
+        "font_color": "#1a1a1a",
+        "bg_color": "#ffffff"
+      }
+    },
+    {
+      "token_ids": [
+        15
+      ],
+      "answer": "Golgi",
+      "bbox": [
+        0.0833,
+        0.3417,
+        0.1417,
+        0.3796
+      ],
+      "type": "term",
+      "hint": "소기관 이름(영어)",
+      "variants": [],
+      "answer_group": null,
+      "style": {
+        "font_size_ratio": 0.0222,
+        "font_color": "#1a1a1a",
+        "bg_color": "#ffffff"
+      }
+    },
+    {
+      "token_ids": [
+        23
+      ],
+      "answer": "인지질",
+      "bbox": [
+        0.1799,
+        0.4046,
+        0.2521,
+        0.4398
+      ],
+      "type": "term",
+      "hint": null,
+      "variants": [],
+      "answer_group": null,
+      "style": {
+        "font_size_ratio": 0.0222,
+        "font_color": "#1a1a1a",
+        "bg_color": "#ffffff"
+      }
+    },
+    {
+      "token_ids": [
+        29
+      ],
+      "answer": "1665",
+      "bbox": [
+        0.2097,
+        0.4731,
+        0.2653,
+        0.5019
+      ],
+      "type": "number",
+      "hint": null,
+      "variants": [],
+      "answer_group": null,
+      "style": {
+        "font_size_ratio": 0.0222,
+        "font_color": "#c0392b",
+        "bg_color": "#ffffff"
+      }
+    }
+  ],
+  "selection": {
+    "source": "fallback",
+    "attempts": 1,
+    "quality": {
+      "survival_ratio": 1.0
+    }
+  }
+}
