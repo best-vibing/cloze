@@ -37,7 +37,6 @@ Python 버전과 라이브러리 버전은 팀 전체가 같게 쓴다. `uv`가 
 1. [uv](https://docs.astral.sh/uv/) 설치
 2. `uv sync` — Python 3.13이 없으면 uv가 받아 오고, 잠금 파일 그대로 의존성을 설치한다
 3. `.env.example`을 복사해 `.env`를 만들고 값을 채운다(`.env`는 커밋하지 않는다)
-4. Gemini 키는 `.secrets/gemini_api_key.txt`에 키 값만 UTF-8 텍스트로 보관한다. 이 폴더는 Git에서 제외한다. 다른 위치는 `CLOZE_GEMINI_API_KEY_FILE`로 지정한다(상대 경로는 실행 폴더 기준). 키 파일의 읽기 권한은 필요한 사용자로 제한하고, 저장소 밖의 파일도 커밋하지 않는다. 기존 `CLOZE_GEMINI_API_KEY`는 사용하지 않는다.
 
 | 명령 | 하는 일 | CI에서도 실행 |
 |---|---|---|
