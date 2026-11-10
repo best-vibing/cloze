@@ -9,10 +9,16 @@
 <body>
   <header class="bar">
     <h1>입력칸 겹치기 시험판 <small>순수 HTML/JS</small></h1>
-    <label><input type="checkbox" id="debug"> 빈칸 테두리 보기</label>
+    <div class="actions">
+      <label><input type="checkbox" id="debug"> 빈칸 테두리 보기</label>
+      <button type="button" id="check">정답 확인</button>
+    </div>
   </header>
   <main id="pages" aria-live="polite"></main>
-  <p id="hint" class="hint" role="status"></p>
+  <footer class="hint">
+    <p id="result" role="status"></p>
+    <p id="hint" role="status"></p>
+  </footer>
   <script type="module" src="app.js"></script>
 </body>
 </html>
