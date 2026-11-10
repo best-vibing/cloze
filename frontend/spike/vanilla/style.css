@@ -52,7 +52,8 @@ body {
   padding: 0 0.15em;
   border: 0;
   border-bottom: 1px dashed rgb(0 0 0 / 0.25);
-  font-family: inherit;
+  /* API에 글꼴 정보가 없어 강의자료에 흔한 Arial 계열을 먼저 쓴다. 한글은 맑은 고딕으로 넘어간다. */
+  font-family: Arial, Helvetica, "Malgun Gothic", sans-serif;
   font-size: calc(var(--font-ratio) * 100cqw);
   line-height: 1;
   color: var(--font-color);

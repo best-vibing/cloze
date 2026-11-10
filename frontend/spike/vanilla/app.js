@@ -1,29 +1,63 @@
 // 프론트 스파이크(#57) — 순수 HTML/JS 후보.
-// 페이지 결과 JSON(데이터 계약 1.4)과 가린 이미지만으로 입력칸을 겹친다.
+// mask 명령 결과(page_NNN.json + .webp)나 페이지 결과 JSON(데이터 계약 1.4)만으로 입력칸을 겹친다.
 // 입력칸 규칙: docs/design/grading-and-overlay.md 3.2
 
-const FIXTURES = [{ json: "../fixtures/page-1.json", image: "../fixtures/page-1.png" }];
+const FIXTURES = [
+  // tests/fixtures/sample.pdf를 feat/redact의 mask 명령으로 만든 결과(영어 3쪽)
+  { json: "../fixtures/mask/page_001.json", image: "../fixtures/mask/page_001.webp" },
+  { json: "../fixtures/mask/page_002.json", image: "../fixtures/mask/page_002.webp" },
+  { json: "../fixtures/mask/page_003.json", image: "../fixtures/mask/page_003.webp" },
+  // make_fixture.py로 만든 계약 1.4 모양(한국어 1쪽, style·hint 포함)
+  { json: "../fixtures/page-1.json", image: "../fixtures/page-1.png" },
+];
 const MAX_GROW = 3; // 입력이 길어질 때 bbox 폭의 최대 몇 배까지 늘릴지
+const FONT_FROM_BBOX = 0.85; // [가설] style이 없을 때 글자 크기 = bbox 높이 × 0.85 (설계 3.1 스캔본 규칙)
+const DEFAULT_FONT_COLOR = "#1a1a1a"; // mask 결과에는 글자색이 없다
 
-/**
- * 페이지 결과(계약 1.4)를 `GET /blank-sets/{id}`의 페이지 모양으로 바꾼다.
- * 정답(answer, variants)은 버린다. 화면에는 정답이 없어야 한다(D2).
- * order는 읽는 순서(줄 → x좌표)다.
- */
-function toApiPage(result, imageUrl) {
+/** 계약 1.4 모양: style·hint가 있고, order는 읽는 순서(줄 → x좌표)로 매긴다. */
+function fromContract(result) {
   const lineOf = new Map(result.tokens.map((t) => [t.id, t.line_id]));
-  const blanks = result.blanks
-    .map((b, i) => ({
-      blank_id: `p${result.page.page_no}-b${i}`,
-      line: lineOf.get(b.token_ids[0]),
-      bbox: b.bbox,
-      type: b.type,
-      hint: b.hint,
-      style: b.style,
-    }))
+  return result.blanks
+    .map((b) => ({ ...b, line: lineOf.get(b.token_ids[0]) }))
     .sort((a, b) => a.line - b.line || a.bbox[0] - b.bbox[0])
     .map(({ line, ...b }, i) => ({ ...b, order: i + 1 }));
-  return { ...result.page, image_url: imageUrl, blanks };
+}
+
+/** mask 결과 모양: order·answer·bbox·bg_color만 있다. 글자 크기는 bbox 높이로 짐작한다. */
+function fromMask(result) {
+  const { width_pt: w, height_pt: h } = result.page;
+  return result.blanks.map((b) => ({
+    order: b.order,
+    answer: b.answer,
+    variants: [],
+    bbox: b.bbox,
+    type: "term",
+    hint: null,
+    style: {
+      font_size_ratio: (b.bbox[3] - b.bbox[1]) * FONT_FROM_BBOX * (h / w),
+      font_color: DEFAULT_FONT_COLOR,
+      bg_color: b.bg_color,
+    },
+  }));
+}
+
+/** 두 모양을 같은 모양(정답 포함)으로 읽는다. pageNo는 세트 안의 쪽 순서다. */
+function readFixture(result, pageNo) {
+  const blanks = (result.tokens ? fromContract(result) : fromMask(result))
+    .sort((a, b) => a.order - b.order)
+    .map((b) => ({ ...b, blank_id: `p${pageNo}-o${b.order}` }));
+  return { page: { ...result.page, page_no: pageNo }, blanks };
+}
+
+/**
+ * 읽은 쪽을 `GET /blank-sets/{id}`의 페이지 모양으로 바꾼다.
+ * 정답(answer, variants)은 버린다. 화면에는 정답이 없어야 한다(D2).
+ */
+function toApiPage({ page, blanks }, imageUrl) {
+  const shown = blanks.map(({ blank_id, order, bbox, type, hint, style }) => ({
+    blank_id, order, bbox, type, hint, style,
+  }));
+  return { ...page, image_url: imageUrl, blanks: shown };
 }
 
 // ---- 가짜 채점 서버 ------------------------------------------------------------
@@ -69,11 +103,9 @@ function judge(input, blank) {
   return "wrong";
 }
 
-function createFakeServer(pageResults) {
+function createFakeServer(pages) {
   const answers = new Map();
-  for (const r of pageResults) {
-    r.blanks.forEach((b, i) => answers.set(`p${r.page.page_no}-b${i}`, b));
-  }
+  for (const p of pages) for (const b of p.blanks) answers.set(b.blank_id, b);
   let attemptNo = 0;
   return {
     async submitAttempt(given) {
@@ -92,8 +124,10 @@ function fitWidth(input, measure) {
   const minCqw = (x1 - x0) * 100;
   const maxCqw = Math.min(minCqw * MAX_GROW, (1 - x0) * 100);
   const pageWidth = input.parentElement.clientWidth;
-  measure.font = getComputedStyle(input).font;
-  const textCqw = ((measure.measureText(input.value).width + 8) / pageWidth) * 100;
+  const css = getComputedStyle(input);
+  measure.font = css.font;
+  const padding = parseFloat(css.paddingLeft) + parseFloat(css.paddingRight) + 2; // +2: 커서 자리
+  const textCqw = ((measure.measureText(input.value).width + padding) / pageWidth) * 100;
   input.style.width = `${Math.min(Math.max(minCqw, textCqw), maxCqw)}cqw`;
 }
 
@@ -196,13 +230,13 @@ async function main() {
   const hintEl = document.getElementById("hint");
   const resultEl = document.getElementById("result");
   const measure = document.createElement("canvas").getContext("2d");
-  const pageResults = [];
-  for (const f of FIXTURES) {
-    const result = await (await fetch(f.json)).json();
-    pageResults.push(result);
-    pagesEl.append(renderPage(toApiPage(result, f.image), measure));
+  const pages = [];
+  for (const [i, f] of FIXTURES.entries()) {
+    const page = readFixture(await (await fetch(f.json)).json(), i + 1);
+    pages.push(page);
+    pagesEl.append(renderPage(toApiPage(page, f.image), measure));
   }
-  const server = createFakeServer(pageResults);
+  const server = createFakeServer(pages);
   const submit = () => submitAnswers(server, resultEl);
   document.getElementById("check").addEventListener("click", submit);
   document.addEventListener("keydown", (e) => onKeydown(e, submit));
