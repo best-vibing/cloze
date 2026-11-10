@@ -2,6 +2,7 @@
 
 import asyncio
 import secrets
+import socket
 import traceback
 from collections import deque
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ import pytest
 from google import genai
 from google.genai import errors
 from PIL import Image
+from pydantic import SecretStr
 
 from cloze.config import Settings
 from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransientError
@@ -72,8 +74,17 @@ class FakeTransport:
 def no_network(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """가짜 전송 대신 실제 SDK를 만드는 실수를 막는다."""
     monkeypatch.setattr(genai, "Client", MagicMock(side_effect=AssertionError("live SDK")))
+    monkeypatch.setattr(socket, "getaddrinfo", MagicMock(side_effect=AssertionError("network")))
+    monkeypatch.setattr(
+        socket, "create_connection", MagicMock(side_effect=AssertionError("network"))
+    )
     monkeypatch.chdir(tmp_path)
-    for name in ("CLOZE_GEMINI_API_KEY_FILE", "CLOZE_GEMINI_MODEL", "CLOZE_GEMINI_TIMEOUT_S"):
+    for name in (
+        "CLOZE_GEMINI_API_KEY",
+        "CLOZE_GEMINI_MODEL",
+        "CLOZE_GEMINI_TIMEOUT_S",
+        "CLOZE_GEMINI_MAX_CONCURRENCY",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -146,34 +157,30 @@ def test_permanent_error_is_private_and_not_retried(code: int) -> None:
 def test_missing_key_is_checked_lazily() -> None:
     """키 없는 클라이언트는 생성되지만 첫 실제 사용 때 명확히 실패한다."""
     client = GeminiClient(Settings())
-    with pytest.raises(LLMPermanentError, match="key file"):
+    assert Settings().gemini_api_key is None
+    with pytest.raises(LLMPermanentError, match="CLOZE_GEMINI_API_KEY is required"):
         asyncio.run(client.ask_llm("prompt", SCHEMA))
 
 
-@pytest.mark.parametrize("contents", ["", " \n", "\ufefftest-placeholder\n"])
-def test_key_file_contents(contents: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """빈 파일은 거절하고 BOM과 줄바꿈은 제거하여 가짜 SDK에 전달한다."""
-    key_file = tmp_path / "key.txt"
-    key_file.write_text(contents, encoding="utf-8")
+@pytest.mark.parametrize("contents", ["", " \n"])
+def test_empty_key_is_rejected(contents: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """환경변수에서 읽은 빈 키와 공백 키는 SDK 생성 전에 거절한다."""
+    monkeypatch.setenv("CLOZE_GEMINI_API_KEY", contents)
     sdk = MagicMock()
     monkeypatch.setattr(genai, "Client", sdk)
-    settings = Settings(gemini_api_key_file=key_file)
-    if not contents.strip():
-        with pytest.raises(LLMPermanentError, match="must not be empty"):
-            gemini._SDKTransport(settings)
-        sdk.assert_not_called()
-    else:
-        gemini._SDKTransport(settings)
-        assert sdk.call_args.kwargs["api_key"] == "test-placeholder"
+    with pytest.raises(LLMPermanentError, match="must not be empty"):
+        gemini._SDKTransport(Settings())
+    sdk.assert_not_called()
 
 
-def test_unreadable_key_file_is_private(tmp_path: Path) -> None:
-    """잘못된 문자 인코딩의 파일 내용을 오류 출력에 포함하지 않는다."""
-    key_file = tmp_path / "key.txt"
-    key_file.write_bytes(b"\xffprivate-placeholder")
+def test_key_error_is_private(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SDK 초기화 오류에 키가 포함되어도 공개 오류와 traceback에서 숨긴다."""
+    key = "private-placeholder"
+    monkeypatch.setattr(genai, "Client", MagicMock(side_effect=ValueError(key)))
+    client = GeminiClient(Settings(gemini_api_key=SecretStr(key)))
     with pytest.raises(LLMPermanentError) as captured:
-        gemini._SDKTransport(Settings(gemini_api_key_file=key_file))
-    assert "private-placeholder" not in "".join(traceback.format_exception(captured.value))
+        asyncio.run(client.ask_llm("prompt", SCHEMA))
+    assert key not in "".join(traceback.format_exception(captured.value))
 
 
 def test_invalid_schema_does_not_send() -> None:
@@ -186,9 +193,11 @@ def test_invalid_schema_does_not_send() -> None:
 
 def test_remote_schema_reference_does_not_fetch() -> None:
     """외부 스키마 참조를 네트워크로 가져오지 않는다."""
-    client = GeminiClient(transport=FakeTransport())
-    with pytest.raises(LLMInvalidResponse):
+    transport = FakeTransport()
+    client = GeminiClient(transport=transport)
+    with pytest.raises(LLMPermanentError):
         asyncio.run(client.ask_llm("prompt", {"$ref": "https://invalid.example/schema"}))
+    assert transport.calls == 0
 
 
 def test_concurrency_limit() -> None:
@@ -270,9 +279,18 @@ def test_sdk_configuration_and_close(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = MagicMock()
     fake.aio.models.generate_content = AsyncMock(return_value=MagicMock(text='{"ok":true}'))
     fake.aio.aclose = AsyncMock()
-    settings = Settings(gemini_timeout_s=1.25, gemini_model="test-model")
-    client = GeminiClient(settings, transport=fake_transport(fake, settings))
+    Path(".env").write_text("CLOZE_GEMINI_API_KEY=test-placeholder\n", encoding="utf-8")
+    settings = Settings(gemini_model="test-model")
+    assert isinstance(settings.gemini_api_key, SecretStr)
+    sdk = MagicMock(return_value=fake)
+    monkeypatch.setattr(genai, "Client", sdk)
+    client = GeminiClient(settings)
     asyncio.run(check_fake_sdk(client))
+    sdk.assert_called_once()
+    assert sdk.call_args.kwargs["api_key"] == "test-placeholder"
+    options = sdk.call_args.kwargs["http_options"]
+    assert options.timeout == 60000
+    assert options.retry_options.attempts == 1
     kwargs = fake.aio.models.generate_content.call_args.kwargs
     assert kwargs["model"] == "test-model"
     assert kwargs["contents"] == ["prompt"]
