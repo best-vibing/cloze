@@ -51,12 +51,13 @@ class _SDKTransport:
 
     def __init__(self, settings: Settings) -> None:
         """키와 설정을 확인하고 네트워크 호출 없이 SDK를 준비한다."""
-        key = settings.gemini_api_key
-        if key is None or not key.get_secret_value().strip():
-            raise LLMPermanentError("CLOZE_GEMINI_API_KEY is required")
-        self._client = genai.Client(
-            api_key=key.get_secret_value(), http_options=_http_options(settings)
-        ).aio
+        try:
+            key = settings.gemini_api_key_file.read_text(encoding="utf-8-sig").strip()
+        except (OSError, UnicodeError):
+            raise LLMPermanentError("Gemini API key file cannot be read") from None
+        if not key:
+            raise LLMPermanentError("Gemini API key file must not be empty")
+        self._client = genai.Client(api_key=key, http_options=_http_options(settings)).aio
         self._model = settings.gemini_model
 
     async def generate(self, prompt: str, schema: JSONObject, image: Image | None) -> str:
