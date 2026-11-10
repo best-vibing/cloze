@@ -7,7 +7,6 @@ import traceback
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -120,7 +119,9 @@ def test_transient_retry_then_success(code: int, monkeypatch: pytest.MonkeyPatch
     delay.assert_awaited_once_with(0)
 
 
-@pytest.mark.parametrize("error", [TimeoutError("private"), httpx.ConnectError("private")])
+@pytest.mark.parametrize(
+    "error", [TimeoutError("private"), httpx.ConnectError("private"), errors.APIError(429, {})]
+)
 def test_transport_errors_exhaust_three_attempts(
     error: Exception, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -132,16 +133,6 @@ def test_transport_errors_exhaust_three_attempts(
         asyncio.run(GeminiClient(transport=transport).ask_llm("prompt", SCHEMA))
     assert transport.calls == 3
     assert delay.await_count == 2
-
-
-def test_http_errors_exhaust_three_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """429가 계속되어도 SDK 재시도와 곱해지지 않고 세 번에 끝난다."""
-    monkeypatch.setattr(gemini, "_retry_delay", AsyncMock())
-    error = errors.APIError(429, {"message": "private"})
-    transport = FakeTransport(deque([error, error, error]))
-    with pytest.raises(LLMTransientError, match="3 attempts"):
-        asyncio.run(GeminiClient(transport=transport).ask_llm("prompt", SCHEMA))
-    assert transport.calls == 3
 
 
 @pytest.mark.parametrize("code", [400, 401, 403, 404])
@@ -183,20 +174,15 @@ def test_key_error_is_private(monkeypatch: pytest.MonkeyPatch) -> None:
     assert key not in "".join(traceback.format_exception(captured.value))
 
 
-def test_invalid_schema_does_not_send() -> None:
-    """잘못된 입력 스키마는 전송 전 설정 오류로 거절한다."""
+@pytest.mark.parametrize(
+    ("schema", "message"),
+    [({"type": 123}, "JSON Schema"), ({"$ref": "https://invalid.example/schema"}, "reference")],
+)
+def test_invalid_schema_does_not_send(schema: JSONObject, message: str) -> None:
+    """잘못된 스키마와 외부 참조는 네트워크 전송 전에 거절한다."""
     transport = FakeTransport()
-    with pytest.raises(LLMPermanentError, match="JSON Schema"):
-        asyncio.run(GeminiClient(transport=transport).ask_llm("prompt", {"type": 123}))
-    assert transport.calls == 0
-
-
-def test_remote_schema_reference_does_not_fetch() -> None:
-    """외부 스키마 참조를 네트워크로 가져오지 않는다."""
-    transport = FakeTransport()
-    client = GeminiClient(transport=transport)
-    with pytest.raises(LLMPermanentError):
-        asyncio.run(client.ask_llm("prompt", {"$ref": "https://invalid.example/schema"}))
+    with pytest.raises(LLMPermanentError, match=message):
+        asyncio.run(GeminiClient(transport=transport).ask_llm("prompt", schema))
     assert transport.calls == 0
 
 
@@ -285,7 +271,12 @@ def test_sdk_configuration_and_close(monkeypatch: pytest.MonkeyPatch) -> None:
     sdk = MagicMock(return_value=fake)
     monkeypatch.setattr(genai, "Client", sdk)
     client = GeminiClient(settings)
-    asyncio.run(check_fake_sdk(client))
+
+    async def scenario() -> None:
+        assert await client.ask_llm("prompt", SCHEMA) == {"ok": True}
+        await client.aclose()
+
+    asyncio.run(scenario())
     sdk.assert_called_once()
     assert sdk.call_args.kwargs["api_key"] == "test-placeholder"
     options = sdk.call_args.kwargs["http_options"]
@@ -322,28 +313,49 @@ def test_non_json_numbers(constant: str) -> None:
         asyncio.run(GeminiClient(transport=transport).ask_llm("prompt", {"type": "object"}))
 
 
-def test_cancel_during_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    """백오프 중 취소는 추가 호출 없이 전파된다."""
+@pytest.mark.parametrize("action", ["cancel", "retry", "close"])
+def test_during_backoff(action: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """백오프는 슬롯을 반환하고 취소·종료 후 추가 전송이나 연결 생성을 막는다."""
 
     async def scenario() -> None:
-        """재시도 대기 진입 후 취소한다."""
-        waiting = asyncio.Event()
+        waiting, resume = asyncio.Event(), asyncio.Event()
 
         async def delay(attempt: int) -> None:
-            """취소될 때까지 테스트 재시도 대기를 유지한다."""
             waiting.set()
-            await asyncio.Event().wait()
+            await resume.wait()
 
         monkeypatch.setattr(gemini, "_retry_delay", delay)
         transport = FakeTransport(deque([TimeoutError("private")]))
-        client = GeminiClient(transport=transport)
-        task = asyncio.create_task(client.ask_llm("prompt", SCHEMA))
-        await waiting.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert transport.calls == 1
+        factory = MagicMock(return_value=transport)
+        monkeypatch.setattr(gemini, "_SDKTransport", factory)
+        client = GeminiClient(Settings(gemini_max_concurrency=1))
+        async with asyncio.timeout(2):
+            task = asyncio.create_task(client.ask_llm("prompt", SCHEMA))
+            try:
+                await waiting.wait()
+                if action == "cancel":
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                elif action == "close":
+                    await client.aclose()
+                    assert transport.closes == 1
+                    resume.set()
+                    with pytest.raises(LLMPermanentError, match="closed"):
+                        await task
+                else:
+                    assert await client.ask_llm("other", SCHEMA) == {"ok": True}
+                    assert not task.done()
+                    assert transport.calls == 2
+                    resume.set()
+                    assert await task == {"ok": True}
+                assert transport.calls == (3 if action == "retry" else 1)
+                factory.assert_called_once()
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         await client.aclose()
+        assert transport.closes == 1
 
     asyncio.run(scenario())
 
@@ -376,25 +388,13 @@ def test_sdk_receives_pil_image() -> None:
     fake = MagicMock()
     fake.aio.models.generate_content = AsyncMock(return_value=MagicMock(text='{"ok":true}'))
     fake.aio.aclose = AsyncMock()
-    adapter = fake_transport(fake, Settings(gemini_timeout_s=1.25))
-    image = Image.new("RGB", (2, 2))
-    asyncio.run(adapter.generate("prompt", SCHEMA, image))
-    assert fake.aio.models.generate_content.call_args.kwargs["contents"] == ["prompt", image]
-
-
-def fake_transport(fake: Any, settings: Settings) -> gemini.GeminiTransport:
-    """테스트용 SDK 전송을 실제 키 없이 구성한다."""
     adapter = object.__new__(gemini._SDKTransport)
     adapter._client = fake.aio
-    adapter._model = settings.gemini_model
-    options = gemini._http_options(settings)
+    adapter._model = Settings().gemini_model
+    options = gemini._http_options(Settings(gemini_timeout_s=1.25))
     assert options.timeout == 1250
     assert options.retry_options is not None
     assert options.retry_options.attempts == 1
-    return adapter
-
-
-async def check_fake_sdk(client: GeminiClient) -> None:
-    """가짜 SDK를 통해 응답을 받고 닫는다."""
-    assert await client.ask_llm("prompt", SCHEMA) == {"ok": True}
-    await client.aclose()
+    image = Image.new("RGB", (2, 2))
+    asyncio.run(adapter.generate("prompt", SCHEMA, image))
+    assert fake.aio.models.generate_content.call_args.kwargs["contents"] == ["prompt", image]
