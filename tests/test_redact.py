@@ -43,6 +43,21 @@ def test_blank_bbox_unions_tokens_and_pads_evenly() -> None:
     assert (y0, y1) == pytest.approx((0.5 - pad_pt / 800, 0.6 + pad_pt / 800))
 
 
+def test_blank_bbox_prefers_word_bbox_over_token_bbox() -> None:
+    # "class." 같은 토큰은 word_bbox가 마침표를 뺀 범위라, 칠하는 상자도 그만큼 좁아진다.
+    token = Token(
+        id=0,
+        text="class.",
+        bbox=(0.1, 0.5, 0.3, 0.6),
+        word_bbox=(0.1, 0.5, 0.28, 0.6),
+        line_id=0,
+        font_size=12,
+        fontname="R",
+    )
+    page = PageTokens(page=PageInfo(page_no=1, width_pt=600, height_pt=800), tokens=[token])
+    assert blank_bbox(page, [0], pad_ratio=0.0) == (0.1, 0.5, 0.28, 0.6)
+
+
 def test_vertical_word_gets_same_padding_as_horizontal() -> None:
     # 회전 페이지의 세로 단어도 bbox 길이와 상관없이 글자 크기 기준으로 같은 두께가 붙는다.
     page = _page([(0.1, 0.1, 0.4, 0.12), (0.5, 0.1, 0.52, 0.4)])

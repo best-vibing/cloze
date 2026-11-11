@@ -32,6 +32,8 @@ class Token(BaseModel):
     id: int
     text: str
     bbox: BBox
+    # 앞뒤 문장 부호를 뺀 글자들의 bbox. 뗄 부호가 없으면 None이고, 그때는 bbox와 같다.
+    word_bbox: BBox | None = None
     line_id: int
     font_size: float
     fontname: str

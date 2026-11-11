@@ -27,12 +27,14 @@ class RedactResult:
 
 
 def blank_bbox(page: PageTokens, span: list[int], pad_ratio: float = PAD_RATIO) -> BBox:
-    """묶인 토큰 bbox의 합집합에 패딩을 더하고 0~1로 자른다. gate가 생기면 그쪽으로 옮긴다."""
+    """묶인 토큰 bbox의 합집합에 패딩을 더하고 0~1로 자른다. gate가 생기면 그쪽으로 옮긴다.
+    앞뒤 문장 부호는 칠하지 않도록, 토큰에 word_bbox가 있으면 그것을 쓴다."""
     tokens = [token for token in page.tokens if token.id in set(span)]
     if not tokens:
         raise ValueError(f"span {span}에 해당하는 토큰이 없다")
-    x0, y0 = min(t.bbox[0] for t in tokens), min(t.bbox[1] for t in tokens)
-    x1, y1 = max(t.bbox[2] for t in tokens), max(t.bbox[3] for t in tokens)
+    boxes = [token.word_bbox or token.bbox for token in tokens]
+    x0, y0 = min(box[0] for box in boxes), min(box[1] for box in boxes)
+    x1, y1 = max(box[2] for box in boxes), max(box[3] for box in boxes)
     # 줄 높이는 bbox 높이가 아니라 글자 크기로 잰다. 세로로 쓰인(회전) 글은 bbox 높이가 단어 길이다.
     # 패딩은 포인트로 정한 뒤 가로·세로 비율에 맞게 나눈다. 그래야 사방 두께가 같다.
     pad_pt = max(token.font_size for token in tokens) * pad_ratio
