@@ -11,10 +11,14 @@ from pdfplumber.utils.text import WordExtractor
 
 from cloze.core.models import BBox, PageInfo, PageTokens, Token
 
-# 렌더링 크기·이미지 형식·좌표 계산이 바뀌면 올린다(pdf-extraction.md 3절).
-EXTRACT_VERSION = 1
+# 렌더링 크기·이미지 형식·좌표 계산·단어 나누기가 바뀌면 올린다(pdf-extraction.md 3절).
+EXTRACT_VERSION = 2
 # [가설] 읽는 방향으로 본 top 차이가 이 값(pt) 이하이면 같은 줄로 본다.
 LINE_TOLERANCE_PT = 3.0
+# [가설] 글자 사이 간격이 글자 크기의 이 비율을 넘으면 다른 단어로 본다(pdf-extraction.md 2절).
+# 한국어 PDF는 띄어쓰기를 공백 글자 없이 0.28~0.30em 간격으로만 저장하는 경우가 있어,
+# pdfplumber 기본값 3pt(10pt 글자에서 0.3em)로는 어절이 붙는다. 어절 안 글자 간격은 0이다.
+X_TOLERANCE_RATIO = 0.15
 
 type Frame = tuple[float, float, float, float]  # x0, top, x1, bottom (pt)
 type Word = dict[str, Any]
@@ -58,11 +62,10 @@ def _page_tokens(page_no: int, page: Page) -> PageTokens:
 def _word_extractor(direction: int) -> WordExtractor:
     """0·180도 글자는 pdfplumber가 upright로, 90·270도 글자는 rotated로 다룬다."""
     char_dir, line_dir = _WORD_DIRECTIONS[direction]
+    options: dict[str, Any] = {"extra_attrs": EXTRA_ATTRS, "x_tolerance_ratio": X_TOLERANCE_RATIO}
     if direction in (90, 270):
-        return WordExtractor(
-            extra_attrs=EXTRA_ATTRS, char_dir_rotated=char_dir, line_dir_rotated=line_dir
-        )
-    return WordExtractor(extra_attrs=EXTRA_ATTRS, char_dir=char_dir, line_dir=line_dir)
+        return WordExtractor(char_dir_rotated=char_dir, line_dir_rotated=line_dir, **options)
+    return WordExtractor(char_dir=char_dir, line_dir=line_dir, **options)
 
 
 def _visible_frame(page: Page) -> Frame:
