@@ -29,13 +29,19 @@
 
 Compose 서비스 `scheduler`로 `taskiq scheduler`를 하나 띄운다. 정리 작업은 워커가 실행하는 일반 Taskiq 작업이고, 스케줄러는 주기마다 그 작업의 쪽지만 넣는다. 주기는 1시간 [가설]이다.
 
+사용법 [확인]([Taskiq — Scheduling tasks](https://taskiq-python.github.io/guide/scheduling-tasks.html), 2026-11-11 확인):
+
+- 실행: `taskiq scheduler 모듈:scheduler`. 스케줄러 객체는 `TaskiqScheduler(broker=broker, sources=[LabelScheduleSource(broker)])`로 만든다.
+- 주기 지정: 작업 정의에 라벨로 붙인다. 예: `@broker.task(schedule=[{"cron": "0 * * * *"}])`(매시 정각). 시간대가 없는 시각은 UTC로 본다. 매시 정각 주기는 시간대와 무관하다.
+- 역할: "The scheduler doesn't execute tasks. It only sends them." 실행은 워커가 한다.
+
 ## 결과
 
-- `scheduler`는 항상 한 개다. 발표 때 워커를 늘려도 스케줄러는 늘리지 않는다.
+- `scheduler`는 항상 한 개다. 발표 때 워커를 늘려도 스케줄러는 늘리지 않는다. 공식 문서도 "Please always run only one instance of the scheduler!"라고 하며, 여러 개면 작업이 그 수만큼 실행된다고 경고한다 [확인].
 - 스케줄러가 멈추면 정리가 밀릴 뿐, 사용자 요청(업로드·조회·채점)에는 영향이 없다. 다만 그동안 멈춘 세트는 다시 등록되지 않는다.
-- 정리 작업도 두 번 돌아도 결과가 같게 만든다(이미 지운 것은 건너뜀). 스케줄러가 재시작하면서 한 번 더 등록해도 무해해야 하기 때문이다.
+- 정리 작업도 두 번 돌아도 결과가 같게 만든다(이미 지운 것은 건너뜀). 스케줄러는 시작할 때 그 분에 실행할 작업을 바로 보낸다(`--skip-first-run`으로 끌 수 있음) [확인]. 재시작하면서 한 번 더 등록해도 무해해야 하므로 이 플래그는 쓰지 않는다.
 - 재등록은 정리 작업 한 곳에서만 한다. 워커 작업([#52](https://github.com/best-vibing/cloze/issues/52))은 재등록하지 않고 `run_count`만 확인한다.
-- [미확인] 스케줄 소스 종류와 주기 지정 방식은 워커 뼈대([#49](https://github.com/best-vibing/cloze/issues/49))에서 실제로 띄워 확인한다.
+- [미확인] 스케줄러가 꺼져 있던 동안 놓친 실행을 나중에 보내 주는지는 문서에 없다. 정리 작업은 다음 주기에 밀린 것을 함께 처리하므로 놓쳐도 결과는 같다. 실제 동작은 워커 뼈대([#49](https://github.com/best-vibing/cloze/issues/49))에서 띄워 볼 때 확인한다.
 
 ## 재검토 조건
 
