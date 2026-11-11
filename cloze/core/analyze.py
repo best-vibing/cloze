@@ -182,27 +182,17 @@ def _analysis_schema() -> dict[str, Any]:
 
 
 def _page_text(tokens: Sequence[AnalysisToken]) -> str:
-    """페이지의 토큰을 원래 순서의 텍스트로 연결한다.
-
-    Args:
-        tokens: 한 페이지의 읽기 순서 토큰.
-
-    Returns:
-        원래 줄과 토큰 순서를 유지한 텍스트.
-    """
+    """페이지의 줄과 토큰을 원래 순서의 텍스트로 연결한다."""
     return "\n".join(_join_heading_lines(tokens, {token.line_id for token in tokens}))
 
 
 def build_analysis_prompt(pages: Sequence[Sequence[AnalysisToken]]) -> str:
-    """전체 제목급 줄과 대표 페이지 본문으로 문자 제한된 지시문을 만든다.
+    """페이지별 tokens에서 최대 12,000자의 분석 입력을 만든다.
 
-    Args:
-        pages: 문서 순서의 페이지별 tokens. PR #15 PageTokens.tokens를 전달한다.
-
-    Returns:
-        최대 MAX_ANALYSIS_INPUT_CHARS 글자의 입력. 지시문과 종료 표시는 보존한다.
-        각 페이지 조각에 예산을 균등 배분해 긴 첫 페이지의 독점을 막는다.
-        문자 절단으로 JSON 조각이 잘릴 수 있다. 이는 토큰 수 보장이 아니다.
+    제목은 데이터 예산의 절반 이하, 본문은 나머지를 사용한다. 각 그룹은 짧은
+    조각의 잔여 예산을 긴 조각에 균등 재분배한다. 제목의 잔여분도 본문에 준다.
+    지시문과 종료 표시를 보존한다. 문자 절단으로 JSON 조각은 잘릴 수 있으며
+    실제 토큰 수를 보장하지 않는다.
     """
     indexed = list(enumerate(pages, start=1))
     selected = select_representative_pages(indexed, lambda page: _page_text(page[1]))
@@ -211,11 +201,28 @@ def build_analysis_prompt(pages: Sequence[Sequence[AnalysisToken]]) -> str:
         for number, tokens in indexed
     ]
     bodies = [f"본문 페이지 {number}: " + _page_text(tokens) for number, tokens in selected]
-    fragments = headings + bodies
-    budget = MAX_ANALYSIS_INPUT_CHARS - len(_INSTRUCTIONS) - len(_DATA_END)
-    per_fragment = max(0, budget // max(1, len(fragments)) - 1)
-    data = "\n".join(limit_analysis_input(fragment, per_fragment) for fragment in fragments)
-    return _INSTRUCTIONS + limit_analysis_input(data, budget) + _DATA_END
+    data_limit = MAX_ANALYSIS_INPUT_CHARS - len(_INSTRUCTIONS) - len(_DATA_END)
+    data = _allocate_analysis_data(headings, bodies, data_limit)
+    return _INSTRUCTIONS + limit_analysis_input(data, data_limit) + _DATA_END
+
+
+def _allocate_analysis_data(headings: list[str], bodies: list[str], data_limit: int) -> str:
+    """제목과 본문에 문자 예산을 배분하고 짧은 조각의 잔여분을 재사용한다."""
+    budget = data_limit
+    budget -= max(0, len(headings) + len(bodies) - 1)  # 줄 구분자도 먼저 예약한다.
+    data: list[str] = []
+    for fragments, available in ((headings, max(0, budget // 2)), (bodies, None)):
+        remaining = budget if available is None else available
+        clipped = [""] * len(fragments)
+        # 짧은 조각부터 확정하되 출력은 원래 페이지 순서를 유지한다.
+        for rank, index in enumerate(
+            sorted(range(len(fragments)), key=lambda i: len(fragments[i]))
+        ):
+            clipped[index] = fragments[index][: max(0, remaining // (len(fragments) - rank))]
+            remaining -= len(clipped[index])
+        budget -= sum(map(len, clipped))
+        data.extend(clipped)
+    return "\n".join(data)
 
 
 def _validated_result(response: object) -> dict[str, str]:
@@ -276,7 +283,7 @@ async def analyze_document(
     Raises:
         Exception: 공통 LLM 오류와 TimeoutError 외 프로그래밍 오류는 전파한다.
     """
-    if not any(_has_sufficient_text(_page_text(tokens)) for tokens in pages):
+    if not _has_analysis_text(pages):
         return _default_result("분석할 텍스트가 부족합니다")
     prompt = build_analysis_prompt(pages)
     try:
@@ -288,6 +295,11 @@ async def analyze_document(
         return _default_result("자료 분석 응답 형식 또는 허용값 오류")
     except (LLMTransientError, LLMPermanentError, TimeoutError) as error:
         return _default_result(f"자료 분석 호출 실패: {type(error).__name__}")
+
+
+def _has_analysis_text(pages: Sequence[Sequence[AnalysisToken]]) -> bool:
+    """분석에 충분한 텍스트가 있는 페이지의 존재 여부를 반환한다."""
+    return any(_has_sufficient_text(_page_text(tokens)) for tokens in pages)
 
 
 async def _fit_token_budget(prompt: str, count_tokens: CountTokens) -> str:

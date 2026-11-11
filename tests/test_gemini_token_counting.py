@@ -11,6 +11,7 @@ from google import genai
 from google.genai import errors, types
 from PIL import Image
 from pydantic import SecretStr
+from test_gemini_regressions import assert_detached_private_context
 
 from cloze.config import Settings
 from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransientError
@@ -240,3 +241,104 @@ def test_sdk_generation_preserves_image_and_schema(monkeypatch: pytest.MonkeyPat
     config = generate.call_args.kwargs["config"]
     assert config.response_mime_type == "application/json"
     assert config.response_json_schema == schema
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ValueError("private-count"), errors.APIError(403, {}), TimeoutError("private-count")],
+)
+def test_count_errors_detach_external_and_ambient_context(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """계산 오류는 직접 예외 체인을 순회해도 원본·주변 비밀을 노출하지 않는다."""
+    monkeypatch.setattr(gemini, "_retry_delay", AsyncMock())
+    transport = _transport()
+    transport.count_tokens.side_effect = error
+
+    async def run() -> None:
+        """다른 민감한 예외 처리 도중 계산 오류를 확인한다."""
+        client = gemini.GeminiClient(_settings(), transport=transport)
+        try:
+            raise ValueError("private-count")
+        except ValueError:
+            with pytest.raises(
+                (LLMInvalidResponse, LLMPermanentError, LLMTransientError)
+            ) as caught:
+                await client.count_tokens("prompt")
+            assert_detached_private_context(caught.value, "private-count")
+        await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_count_cancellation_releases_slot_and_active_task() -> None:
+    """실제 Task 취소 후 생성과 종료가 동일 슬롯을 다시 사용할 수 있다."""
+
+    async def run() -> None:
+        """전송 중 취소를 동기화하고 자원 복구를 확인한다."""
+        entered = asyncio.Event()
+
+        async def count(prompt: str) -> int:
+            """취소될 때까지 전송 슬롯을 점유한다."""
+            entered.set()
+            await asyncio.Event().wait()
+            return 1
+
+        transport = _transport()
+        transport.count_tokens.side_effect = count
+        client = gemini.GeminiClient(_settings(gemini_max_concurrency=1), transport=transport)
+        task = asyncio.create_task(client.count_tokens("prompt"))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not client._active_tasks
+        assert await client.ask_llm("prompt", {"type": "object"}) == {"ok": True}
+        await client.aclose()
+        transport.aclose.assert_awaited_once()
+
+    asyncio.run(asyncio.wait_for(run(), 3))
+
+
+def test_count_reentrant_close_is_rejected_without_deadlock() -> None:
+    """계산 전송 안에서 종료하면 기존 재진입 보호가 클라이언트를 보존한다."""
+
+    async def run() -> None:
+        """재진입 실패 후 정상 생성과 명시적 종료를 확인한다."""
+        transport = _transport()
+        client = gemini.GeminiClient(_settings(gemini_max_concurrency=1), transport=transport)
+
+        async def count(prompt: str) -> int:
+            """활성 계산 Task 안에서 종료를 시도한다."""
+            await client.aclose()
+            return 1
+
+        transport.count_tokens.side_effect = count
+        with pytest.raises(LLMPermanentError, match="inside its active request"):
+            await client.count_tokens("prompt")
+        transport.aclose.assert_not_awaited()
+        assert await client.ask_llm("prompt", {"type": "object"}) == {"ok": True}
+        await client.aclose()
+
+    asyncio.run(asyncio.wait_for(run(), 3))
+
+
+def test_count_does_not_replace_actual_usage_or_generation_attempts() -> None:
+    """계산 결과는 생성 사용량과 콜백 기록에 섞이지 않는다."""
+    transport = _transport(1000)
+    transport.generate.return_value = gemini.GeminiResponse('{"ok":true}', 17, 3)
+    records: list[gemini.LLMAttempt] = []
+
+    async def run() -> None:
+        """동일 클라이언트에서 계산·생성·계산 순서로 호출한다."""
+        client = gemini.GeminiClient(_settings(), transport=transport)
+        assert await client.count_tokens("prompt") == 1000
+        assert records == []
+        await client.ask_llm("prompt", {"type": "object"}, on_attempt=records.append)
+        assert await client.count_tokens("prompt") == 1000
+        await client.aclose()
+
+    asyncio.run(run())
+    assert len(records) == 1
+    assert (records[0].input_tokens, records[0].output_tokens) == (17, 3)
+    assert records[0].outcome == "ok"
