@@ -5,7 +5,9 @@ from typing import Any
 import pytest
 from PIL import Image
 
-from cloze.cli.__main__ import main
+from cloze.cli.__main__ import _answers, main
+from cloze.core.extract import extract_tokens
+from cloze.core.models import Selection, Slot
 
 SAMPLE = Path(__file__).parent / "fixtures" / "sample.pdf"
 
@@ -95,6 +97,24 @@ def test_mask_json_lists_blanks_in_order(tmp_path: Path) -> None:
         assert set(blank) == {"order", "answer", "bbox", "bg_color"}
         assert all(0.0 <= value <= 1.0 for value in blank["bbox"])
         assert blank["bg_color"] == "#ffffff"
+
+
+def test_answers_drop_edge_punctuation_but_keep_josa() -> None:
+    pages = extract_tokens(SAMPLE.read_bytes())
+    first, third = {t.text: t.id for t in pages[0].tokens}, {t.text: t.id for t in pages[2].tokens}
+    spans = [[first["class."]], [first["fitting."]], [first["Momentum"]]]
+    selection = Selection(spans=spans, slots=[Slot()] * 3, source="rule")
+    assert _answers(pages[0], selection) == ["class", "fitting", "Momentum"]
+    # 한국어 조사는 떼지 않는다(v1은 어절 단위). 채점이 조사를 떼고도 맞게 판정한다.
+    selection = Selection(spans=[[third["역전파는"]]], slots=[Slot()], source="rule")
+    assert _answers(pages[2], selection) == ["역전파는"]
+
+
+def test_mask_answers_have_no_edge_punctuation(tmp_path: Path) -> None:
+    _mask(tmp_path, "--density", "100")
+    for page_no in (1, 2, 3):
+        for blank in _load(tmp_path, page_no)["blanks"]:
+            assert blank["answer"] == blank["answer"].strip(".,;:!?()")
 
 
 def test_mask_debug_boxes_writes_png(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
