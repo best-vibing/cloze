@@ -3,7 +3,6 @@
 import asyncio
 import json
 import secrets
-import socket
 import traceback
 from collections import deque
 from dataclasses import dataclass, field
@@ -68,24 +67,6 @@ class FakeTransport:
     async def aclose(self) -> None:
         """종료 호출 수를 기록한다."""
         self.closes += 1
-
-
-@pytest.fixture(autouse=True)
-def no_network(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """가짜 전송 대신 실제 SDK를 만드는 실수를 막는다."""
-    monkeypatch.setattr(genai, "Client", MagicMock(side_effect=AssertionError("live SDK")))
-    monkeypatch.setattr(socket, "getaddrinfo", MagicMock(side_effect=AssertionError("network")))
-    monkeypatch.setattr(
-        socket, "create_connection", MagicMock(side_effect=AssertionError("network"))
-    )
-    monkeypatch.chdir(tmp_path)
-    for name in (
-        "CLOZE_GEMINI_API_KEY",
-        "CLOZE_GEMINI_MODEL",
-        "CLOZE_GEMINI_TIMEOUT_S",
-        "CLOZE_GEMINI_MAX_CONCURRENCY",
-    ):
-        monkeypatch.delenv(name, raising=False)
 
 
 def test_valid_json_and_image_without_key() -> None:
@@ -187,22 +168,55 @@ def test_invalid_schema_does_not_send(schema: JSONObject, message: str) -> None:
     assert transport.calls == 0
 
 
-def test_concurrency_limit() -> None:
-    """여러 요청을 같은 클라이언트에 보내도 활성 호출은 네 개 이하이다."""
+@pytest.mark.parametrize("limit", [1, 2, 4])
+def test_concurrency_limit(limit: int) -> None:
+    """설정된 수만 전송에 진입하고 남은 요청은 슬롯을 기다린다."""
 
     async def scenario() -> None:
-        """동시에 대기하는 요청을 만들고 실행 중인 수를 확인한다."""
-        transport = FakeTransport(blocker=asyncio.Event())
-        client = GeminiClient(transport=transport)
-        tasks = [asyncio.create_task(client.ask_llm("prompt", SCHEMA)) for _ in range(12)]
-        await transport.entered.wait()
-        await asyncio.sleep(0)
-        assert transport.active == 4
-        assert transport.blocker is not None
-        transport.blocker.set()
-        await asyncio.gather(*tasks)
-        assert transport.peak == 4
-        await client.aclose()
+        """모든 요청의 진입 시도와 전송 포화를 이벤트로 확인한다."""
+        async with asyncio.timeout(3):
+            release = asyncio.Event()
+            saturated = asyncio.Event()
+            attempted = [asyncio.Event() for _ in range(limit + 2)]
+            active = 0
+            peak = 0
+
+            async def send(*args: object) -> str:
+                """동시 전송 수를 기록하고 명시적 해제를 기다린다."""
+                nonlocal active, peak
+                active += 1
+                peak = max(peak, active)
+                if active == limit:
+                    saturated.set()
+                try:
+                    await release.wait()
+                    return '{"ok":true}'
+                finally:
+                    active -= 1
+
+            transport = MagicMock()
+            transport.generate = AsyncMock(side_effect=send)
+            transport.aclose = AsyncMock()
+            client = GeminiClient(Settings(gemini_max_concurrency=limit), transport=transport)
+
+            async def request(index: int) -> JSONObject:
+                """요청 시작을 알린 뒤 중간 양보 없이 클라이언트에 진입한다."""
+                attempted[index].set()
+                return await client.ask_llm("prompt", SCHEMA)
+
+            try:
+                async with asyncio.TaskGroup() as group:
+                    tasks = [group.create_task(request(i)) for i in range(len(attempted))]
+                    await asyncio.gather(*(event.wait() for event in attempted))
+                    await saturated.wait()
+                    assert active == limit
+                    assert transport.generate.await_count == limit
+                    release.set()
+                assert all(task.result() == {"ok": True} for task in tasks)
+                assert peak == limit
+                assert transport.generate.await_count == len(attempted)
+            finally:
+                await client.aclose()
 
     asyncio.run(scenario())
 

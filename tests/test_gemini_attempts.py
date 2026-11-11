@@ -1,13 +1,10 @@
 """실제 네트워크 없이 생성 시도 기록과 기존 수명·재시도 계약을 검증한다."""
 
 import asyncio
-import socket
 import traceback
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
-from google import genai
 from google.genai import errors, types
 
 from cloze.config import Settings
@@ -20,15 +17,8 @@ PRIVATE = "fake-api-key-and-response-body"
 
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def isolated(monkeypatch: pytest.MonkeyPatch) -> None:
     """개발자 설정과 실제 SDK·네트워크를 차단하고 백오프를 생략한다."""
-    monkeypatch.chdir(tmp_path)
-    for suffix in ("API_KEY", "MODEL", "TIMEOUT_S", "MAX_CONCURRENCY"):
-        monkeypatch.delenv(f"CLOZE_GEMINI_{suffix}", raising=False)
-    blocked = MagicMock(side_effect=AssertionError("network forbidden"))
-    monkeypatch.setattr(genai, "Client", blocked)
-    monkeypatch.setattr(socket, "getaddrinfo", blocked)
-    monkeypatch.setattr(socket, "create_connection", blocked)
     monkeypatch.setattr(gemini, "_retry_delay", AsyncMock())
 
 

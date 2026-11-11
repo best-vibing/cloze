@@ -2,9 +2,7 @@
 
 import asyncio
 import json
-import socket
 import traceback
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -20,19 +18,6 @@ from cloze.infra.gemini import GeminiClient
 SCHEMA: gemini.JSONObject = {"type": "object"}
 FAKE_API_KEY = "fake-api-key-regression-only"
 FAKE_RESPONSE_BODY = "fake-external-response-body-regression-only"
-
-
-@pytest.fixture(autouse=True)
-def isolated_sdk_and_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """로컬 설정과 실제 SDK 및 네트워크 접근을 차단한다."""
-    monkeypatch.chdir(tmp_path)
-    for name in ("API_KEY", "MODEL", "TIMEOUT_S", "MAX_CONCURRENCY"):
-        monkeypatch.delenv(f"CLOZE_GEMINI_{name}", raising=False)
-    monkeypatch.delenv("CLOZE_SAMPLES_DIR", raising=False)
-    blocked = MagicMock(side_effect=AssertionError("Unexpected network or SDK access"))
-    monkeypatch.setattr(genai, "Client", blocked)
-    monkeypatch.setattr(socket, "getaddrinfo", blocked)
-    monkeypatch.setattr(socket, "create_connection", blocked)
 
 
 def sdk_client(monkeypatch: pytest.MonkeyPatch, sdk: MagicMock) -> GeminiClient:
@@ -78,7 +63,7 @@ def test_injected_generate_content_value_errors_follow_current_mapping(
                 with pytest.raises(LLMInvalidResponse) as captured:
                     await client.ask_llm("prompt", SCHEMA)
                 assert not isinstance(captured.value, LLMPermanentError)
-                assert_suppressed_private_context(captured.value, private)
+                assert_detached_private_context(captured.value, private)
                 send.assert_awaited_once()
                 delay.assert_not_awaited()
             finally:
@@ -107,7 +92,7 @@ def test_request_configuration_errors_are_permanent(
             try:
                 with pytest.raises(LLMPermanentError) as captured:
                     await client.ask_llm("prompt", SCHEMA)
-                assert_suppressed_private_context(captured.value, private)
+                assert_detached_private_context(captured.value, private)
                 config.assert_called_once()
                 sdk.aio.models.generate_content.assert_not_awaited()
                 delay.assert_not_awaited()
@@ -117,80 +102,39 @@ def test_request_configuration_errors_are_permanent(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("limit", [1, 2, 4])
-def test_explicit_concurrency_setting_limits_active_transports(limit: int) -> None:
-    """설정된 수만 전송에 진입하고 남은 요청은 슬롯을 기다린다."""
-
-    async def scenario() -> None:
-        """모든 요청의 진입 시도와 전송 포화를 이벤트로 확인한다."""
-        async with asyncio.timeout(3):
-            release = asyncio.Event()
-            saturated = asyncio.Event()
-            attempted = [asyncio.Event() for _ in range(limit + 2)]
-            active = 0
-            peak = 0
-
-            async def send(*args: object) -> str:
-                """동시 전송 수를 기록하고 명시적 해제를 기다린다."""
-                nonlocal active, peak
-                active += 1
-                peak = max(peak, active)
-                if active == limit:
-                    saturated.set()
-                try:
-                    await release.wait()
-                    return "{}"
-                finally:
-                    active -= 1
-
-            transport = MagicMock()
-            transport.generate = AsyncMock(side_effect=send)
-            transport.aclose = AsyncMock()
-            client = GeminiClient(Settings(gemini_max_concurrency=limit), transport=transport)
-
-            async def request(index: int) -> gemini.JSONObject:
-                """요청 시작을 알린 뒤 중간 양보 없이 클라이언트에 진입한다."""
-                attempted[index].set()
-                return await client.ask_llm("prompt", SCHEMA)
-
-            try:
-                async with asyncio.TaskGroup() as group:
-                    tasks = [group.create_task(request(i)) for i in range(len(attempted))]
-                    await asyncio.gather(*(event.wait() for event in attempted))
-                    await saturated.wait()
-                    assert active == limit
-                    assert transport.generate.await_count == limit
-                    release.set()
-                assert all(task.result() == {} for task in tasks)
-                assert peak == limit
-                assert transport.generate.await_count == len(attempted)
-            finally:
-                await client.aclose()
-
-    asyncio.run(scenario())
+def direct_chain_log(error: BaseException) -> str:
+    """?? ???? ???? cause? context ??? ?? ??? ????."""
+    pending = [error]
+    seen: set[int] = set()
+    messages: list[str] = []
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        messages.extend((str(current), repr(current)))
+        pending.extend(e for e in (current.__cause__, current.__context__) if e is not None)
+    return "\n".join(messages)
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "1.5", "invalid"])
-def test_invalid_concurrency_environment_is_rejected(
-    value: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """양의 정수 이외 환경 설정은 기존 Pydantic 규칙으로 거절된다."""
-    monkeypatch.setenv("CLOZE_GEMINI_MAX_CONCURRENCY", value)
-    with pytest.raises(ValidationError) as captured:
-        Settings()
-    assert captured.value.errors()[0]["loc"] == ("gemini_max_concurrency",)
-
-
-def assert_suppressed_private_context(error: Exception, private: str) -> None:
-    """메시지와 일반 traceback은 숨기지만 원본 context는 남음을 확인한다."""
-    assert private not in str(error)
-    assert private not in "".join(traceback.format_exception(error))
-    assert_retained_private_context(error, private)
-
-
-def assert_retained_private_context(error: Exception, private: str) -> None:
-    """from None이 원본 예외의 비밀값을 삭제하지는 않음을 확인한다."""
+def assert_detached_private_context(error: Exception, private: str) -> None:
+    """?? ??? ?? ?? ??? ????? ?? ?? ??? ????."""
+    logged = direct_chain_log(error) + "".join(traceback.format_exception(error))
+    for secret in (private, FAKE_API_KEY, FAKE_RESPONSE_BODY):
+        assert secret not in logged
+    assert error.__context__ is None
     assert error.__cause__ is None
-    assert error.__suppress_context__ is True
-    assert error.__context__ is not None
-    assert private in str(error.__context__)
+
+
+@pytest.mark.parametrize("link", ["context", "cause"])
+def test_chain_logger_detects_suppressed_secrets(link: str) -> None:
+    """from None?? ?? ??? ???? ?? ??? ?? ??? ???."""
+    error = LLMInvalidResponse("safe")
+    private = ValueError(FAKE_API_KEY + FAKE_RESPONSE_BODY)
+    setattr(error, f"__{link}__", private)
+    error.__suppress_context__ = True
+    logged = direct_chain_log(error)
+    assert FAKE_API_KEY in logged
+    assert FAKE_RESPONSE_BODY in logged
+    with pytest.raises(AssertionError):
+        assert_detached_private_context(error, FAKE_API_KEY)

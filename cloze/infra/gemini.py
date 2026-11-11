@@ -203,6 +203,13 @@ def _validator(schema: JSONObject) -> validators.Draft202012Validator:
 def _check_references(resource: Resource[Any], resolver: Any) -> None:
     """스키마 위치의 참조를 전송 전에 검사하며 외부 자원을 가져오지 않는다."""
     resolver = resolver.in_subresource(resource)
+    _check_resource_references(resource, resolver)
+    for child in resource.subresources():
+        _check_references(child, resolver)
+
+
+def _check_resource_references(resource: Resource[Any], resolver: Any) -> None:
+    """?? ??? ??? ????? ??? ???? ????."""
     for keyword in ("$ref", "$dynamicRef"):
         reference = resource.contents.get(keyword) if isinstance(resource.contents, dict) else None
         if reference is not None:
@@ -210,8 +217,6 @@ def _check_references(resource: Resource[Any], resolver: Any) -> None:
                 resolver.lookup(reference)
             except Unresolvable:
                 raise LLMPermanentError("Unresolvable response schema reference") from None
-    for child in resource.subresources():
-        _check_references(child, resolver)
 
 
 def _reject_constant(value: str) -> None:
