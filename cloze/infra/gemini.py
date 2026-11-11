@@ -4,8 +4,11 @@ import asyncio
 import json
 import math
 import secrets
+from collections.abc import Callable
 from contextlib import AsyncExitStack
-from typing import Any, Protocol, cast
+from dataclasses import dataclass
+from time import monotonic
+from typing import Any, Literal, Protocol, cast
 
 import httpx
 from google import genai
@@ -20,13 +23,42 @@ from cloze.config import Settings
 from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransientError
 
 type JSONObject = dict[str, Any]
+type AttemptOutcome = Literal["ok", "invalid", "transient", "permanent"]
+
+
+@dataclass(frozen=True)
+class LLMAttempt:
+    """민감한 요청·응답 내용을 포함하지 않는 한 번의 생성 시도 기록."""
+
+    attempt: int
+    outcome: AttemptOutcome
+    latency_ms: float
+    input_tokens: int | None
+    output_tokens: int | None
+    model: str
+
+
+@dataclass(frozen=True)
+class GeminiResponse:
+    """전송 응답과 실제 사용량. text=None은 SDK 텍스트 추출 실패다."""
+
+    text: str | None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+def _usage_tokens(value: object) -> int | None:
+    """SDK 사용량의 비음수 정수만 보존하며 누락·비정상 값은 알 수 없음으로 둔다."""
+    return value if type(value) is int and value >= 0 else None
 
 
 class GeminiTransport(Protocol):
     """실제 SDK와 오프라인 테스트가 공유하는 전송 경계."""
 
-    async def generate(self, prompt: str, schema: JSONObject, image: Image | None) -> str:
-        """요청을 전송하고 JSON 응답 문자열을 반환한다."""
+    async def generate(
+        self, prompt: str, schema: JSONObject, image: Image | None
+    ) -> GeminiResponse | str:
+        """텍스트와 사용량을 반환한다. 기존 문자열 전송도 지원한다."""
         ...
 
     async def aclose(self) -> None:
@@ -60,7 +92,9 @@ class _SDKTransport:
         self._client = genai.Client(api_key=key, http_options=_http_options(settings)).aio
         self._model = settings.gemini_model
 
-    async def generate(self, prompt: str, schema: JSONObject, image: Image | None) -> str:
+    async def generate(
+        self, prompt: str, schema: JSONObject, image: Image | None
+    ) -> GeminiResponse:
         """선택적 PIL 이미지와 JSON Schema를 SDK에 전달한다.
 
         Args:
@@ -69,7 +103,7 @@ class _SDKTransport:
             image: 메모리에 있는 PIL 이미지 또는 None.
 
         Returns:
-            응답 JSON 문자열.
+            응답 텍스트와 SDK가 보고한 실제 사용량.
         """
         contents: list[types.PartUnion] = [prompt]
         if image is not None:
@@ -85,14 +119,25 @@ class _SDKTransport:
             contents=contents,
             config=config,
         )
-        try:
-            return response.text or ""
-        except ValueError:
-            raise LLMInvalidResponse("Gemini response text is invalid") from None
+        return _sdk_response(response)
 
     async def aclose(self) -> None:
         """SDK의 비동기 HTTP 연결을 해제한다."""
         await self._client.aclose()
+
+
+def _sdk_response(response: types.GenerateContentResponse) -> GeminiResponse:
+    """텍스트 추출 실패에서도 응답에 포함된 실제 사용량을 보존한다."""
+    usage = response.usage_metadata
+    try:
+        raw = response.text or ""
+    except ValueError:
+        raw = None
+    return GeminiResponse(
+        raw if isinstance(raw, str) else None,
+        _usage_tokens(getattr(usage, "prompt_token_count", None)),
+        _usage_tokens(getattr(usage, "candidates_token_count", None)),
+    )
 
 
 def _classify_api_error(error: errors.APIError) -> Exception:
@@ -100,6 +145,21 @@ def _classify_api_error(error: errors.APIError) -> Exception:
     if error.code in {408, 429} or 500 <= error.code < 600:
         return LLMTransientError("Gemini service temporarily unavailable")
     return LLMPermanentError("Gemini authentication, model or request configuration failed")
+
+
+def _attempt_outcome(error: Exception) -> AttemptOutcome:
+    """이미 분류된 생성 오류를 기록용 결과로 변환한다."""
+    if isinstance(error, LLMInvalidResponse):
+        return "invalid"
+    if isinstance(error, LLMTransientError):
+        return "transient"
+    return "permanent"
+
+
+def _notify_attempt(callback: Callable[[LLMAttempt], None] | None, record: LLMAttempt) -> None:
+    """Gemini 오류 처리 밖에서 콜백을 호출하여 콜백 실패의 재전송을 막는다."""
+    if callback is not None:
+        callback(record)
 
 
 def _validator(schema: JSONObject) -> validators.Draft202012Validator:
@@ -190,7 +250,9 @@ class GeminiClient:
                 raise LLMPermanentError("Invalid Gemini request configuration") from None
         return self._transport
 
-    async def _request_once(self, prompt: str, schema: JSONObject, image: Image | None) -> str:
+    async def _request_once(
+        self, prompt: str, schema: JSONObject, image: Image | None
+    ) -> GeminiResponse | str:
         """한 번 전송하고 알려진 외부 오류를 안전한 공통 오류로 변환한다."""
         transport = self._get_transport()
         try:
@@ -205,20 +267,75 @@ class GeminiClient:
         except ValueError:
             raise LLMInvalidResponse("Gemini response parsing failed") from None
 
-    async def _request(self, prompt: str, schema: JSONObject, image: Image | None) -> str:
+    async def _attempt(
+        self,
+        prompt: str,
+        schema: JSONObject,
+        image: Image | None,
+        validator: validators.Draft202012Validator,
+        attempt: int,
+    ) -> tuple[JSONObject | None, Exception | None, LLMAttempt]:
+        """한 번의 전송과 검증 결과를 수집한다. 취소는 그대로 전파한다."""
+        response = GeminiResponse(None)
+        result = None
+        failure = None
+        outcome: AttemptOutcome = "ok"
+        started = monotonic()
+        try:
+            try:
+                raw = await self._request_once(prompt, schema, image)
+            finally:
+                latency_ms = (monotonic() - started) * 1000
+            response = GeminiResponse(raw) if isinstance(raw, str) else raw
+            if response.text is None:
+                raise LLMInvalidResponse("Gemini response text is invalid")
+            result = _parse_response(response.text or "", validator)
+        except (LLMInvalidResponse, LLMTransientError, LLMPermanentError) as error:
+            failure = error
+            outcome = _attempt_outcome(error)
+        record = LLMAttempt(
+            attempt,
+            outcome,
+            latency_ms,
+            response.input_tokens,
+            response.output_tokens,
+            self._settings.gemini_model,
+        )
+        return result, failure, record
+
+    async def _request(
+        self,
+        prompt: str,
+        schema: JSONObject,
+        image: Image | None,
+        validator: validators.Draft202012Validator,
+        on_attempt: Callable[[LLMAttempt], None] | None,
+    ) -> JSONObject:
         """일시적 오류만 최초 호출 포함 최대 세 번 시도한다."""
         for attempt in range(3):
-            try:
-                async with self._semaphore:
-                    return await self._request_once(prompt, schema, image)
-            except LLMTransientError:
+            async with self._semaphore:
+                self._get_transport()
+                result, failure, record = await self._attempt(
+                    prompt, schema, image, validator, attempt + 1
+                )
+            _notify_attempt(on_attempt, record)
+            if not isinstance(failure, LLMTransientError):
+                if failure is not None:
+                    raise failure
+                return cast(JSONObject, result)
+            else:
                 if attempt == 2:
                     raise LLMTransientError("Gemini request failed after 3 attempts") from None
                 await _retry_delay(attempt)
         raise AssertionError("Unreachable retry state")
 
     async def ask_llm(
-        self, prompt: str, schema: JSONObject, image: Image | None = None
+        self,
+        prompt: str,
+        schema: JSONObject,
+        image: Image | None = None,
+        *,
+        on_attempt: Callable[[LLMAttempt], None] | None = None,
     ) -> JSONObject:
         """설정된 동시 호출 상한 안에서 응답을 받아 검증된 dict를 반환한다.
 
@@ -226,6 +343,7 @@ class GeminiClient:
             prompt: 비어 있지 않은 지시문.
             schema: Draft 2020-12 호환 응답 JSON Schema. 외부 참조는 지원하지 않는다.
             image: SDK에 전달할 PIL.Image.Image 또는 None.
+            on_attempt: 완료된 전송 시도마다 호출할 동기 콜백. 오류는 재시도 없이 전파한다.
 
         Returns:
             스키마 검증을 통과한 JSON 객체.
@@ -237,8 +355,7 @@ class GeminiClient:
         """
         _check_input(prompt, image)
         validator = _validator(schema)
-        raw = await self._request(prompt, schema, image)
-        return _parse_response(raw, validator)
+        return await self._request(prompt, schema, image, validator, on_attempt)
 
     async def aclose(self) -> None:
         """새 요청을 차단하고 진행 중 호출이 끝난 뒤 전송을 한 번 종료한다."""
