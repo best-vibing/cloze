@@ -4,11 +4,11 @@ import asyncio
 import json
 import math
 import secrets
-from collections.abc import Callable
-from contextlib import AsyncExitStack
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass
 from time import monotonic
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, NoReturn, Protocol, cast
 
 import httpx
 from google import genai
@@ -128,7 +128,7 @@ class _SDKTransport:
 
 def _sdk_response(response: types.GenerateContentResponse) -> GeminiResponse:
     """텍스트 추출 실패에서도 응답에 포함된 실제 사용량을 보존한다."""
-    usage = response.usage_metadata
+    usage = getattr(response, "usage_metadata", None)
     try:
         raw = response.text or ""
     except ValueError:
@@ -160,6 +160,32 @@ def _notify_attempt(callback: Callable[[LLMAttempt], None] | None, record: LLMAt
     """Gemini 오류 처리 밖에서 콜백을 호출하여 콜백 실패의 재전송을 막는다."""
     if callback is not None:
         callback(record)
+
+
+def _raise_detached(error: Exception) -> NoReturn:
+    """처리기 밖에서 원본 예외 체인·traceback을 분리해 공개 오류만 올린다."""
+    try:
+        raise error.with_traceback(None) from None
+    except (LLMInvalidResponse, LLMTransientError, LLMPermanentError):
+        # 호출자가 다른 예외를 처리 중이면 raise가 context를 다시 붙이므로 직후 제거한다.
+        error.__context__ = None
+        error.__cause__ = None
+        raise
+
+
+async def _close_once(transport: GeminiTransport) -> None:
+    """한 번의 종료 실패를 안전한 공통 오류로 변환하며 자동 재시도하지 않는다."""
+    try:
+        await transport.aclose()
+    except errors.APIError as error:
+        failure = _classify_api_error(error)
+    except (httpx.TransportError, TimeoutError):
+        failure = LLMTransientError("Gemini transport close temporarily failed")
+    except ValueError:
+        failure = LLMPermanentError("Invalid Gemini transport close configuration")
+    else:
+        return
+    _raise_detached(failure)
 
 
 def _validator(schema: JSONObject) -> validators.Draft202012Validator:
@@ -226,6 +252,9 @@ class GeminiClient:
 
     여러 호출은 같은 인스턴스를 공유해야 설정된 동시 상한이 적용된다.
     종료는 진행 중 호출을 기다리며, 종료가 취소되면 aclose를 다시 호출할 수 있다.
+    전송 중 같은 Task의 aclose 호출은 영구 오류로 거절한다. 전송이 별도 종료 Task를
+    만들고 기다리는 간접 순환은 탐지하지 못하므로 종료는 애플리케이션 수명 코드에서 한다.
+    종료는 활성 전송만 기다린다. 백오프·슬롯 대기 요청은 다음 진입에서 closed로 실패한다.
     """
 
     def __init__(
@@ -238,6 +267,21 @@ class GeminiClient:
         self._semaphore = asyncio.Semaphore(self._max_concurrency)
         self._close_lock = asyncio.Lock()
         self._closed = False
+        self._active_tasks: set[asyncio.Task[Any]] = set()
+
+    @contextmanager
+    def _active_request(self) -> Iterator[None]:
+        """요청·종료 Task를 추적하고 중첩 실행·실패·취소에서도 복구한다."""
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("Gemini operations require an asyncio task")
+        already_active = task in self._active_tasks
+        self._active_tasks.add(task)
+        try:
+            yield
+        finally:
+            if not already_active:
+                self._active_tasks.discard(task)
 
     def _get_transport(self) -> GeminiTransport:
         """첫 실제 요청 때만 SDK 전송을 만든다."""
@@ -250,13 +294,11 @@ class GeminiClient:
                 raise LLMPermanentError("Invalid Gemini request configuration") from None
         return self._transport
 
-    async def _request_once(
-        self, prompt: str, schema: JSONObject, image: Image | None
-    ) -> GeminiResponse | str:
+    async def _request_once[T](self, operation: Callable[[GeminiTransport], Awaitable[T]]) -> T:
         """한 번 전송하고 알려진 외부 오류를 안전한 공통 오류로 변환한다."""
         transport = self._get_transport()
         try:
-            return await transport.generate(prompt, schema, image)
+            return await operation(transport)
         except errors.APIError as error:
             raise _classify_api_error(error) from None
         # google-genai가 aiohttp를 쓰는 환경에서는 해당 예외도 고려해야 한다.
@@ -264,6 +306,7 @@ class GeminiClient:
             raise LLMTransientError("Gemini transport temporarily unavailable") from None
         # 요청 설정 오류는 전송 어댑터가 구성 단계에서 영구 오류로 변환한다.
         # 응답 디코딩·검증 오류(JSONDecodeError, ValidationError 포함)는 ValueError다.
+        # SDK generate_content 내부 ValueError의 요청/응답 발생 단계는 구분할 수 없다.
         except ValueError:
             raise LLMInvalidResponse("Gemini response parsing failed") from None
 
@@ -283,7 +326,9 @@ class GeminiClient:
         started = monotonic()
         try:
             try:
-                raw = await self._request_once(prompt, schema, image)
+                raw = await self._request_once(
+                    lambda transport: transport.generate(prompt, schema, image)
+                )
             finally:
                 latency_ms = (monotonic() - started) * 1000
             response = GeminiResponse(raw) if isinstance(raw, str) else raw
@@ -314,10 +359,11 @@ class GeminiClient:
         """일시적 오류만 최초 호출 포함 최대 세 번 시도한다."""
         for attempt in range(3):
             async with self._semaphore:
-                self._get_transport()
-                result, failure, record = await self._attempt(
-                    prompt, schema, image, validator, attempt + 1
-                )
+                with self._active_request():
+                    self._get_transport()
+                    result, failure, record = await self._attempt(
+                        prompt, schema, image, validator, attempt + 1
+                    )
             _notify_attempt(on_attempt, record)
             if not isinstance(failure, LLMTransientError):
                 if failure is not None:
@@ -353,17 +399,35 @@ class GeminiClient:
             LLMTransientError: 일시적 오류가 세 번 지속된 경우.
             LLMInvalidResponse: 응답 파싱 또는 검증이 실패한 경우.
         """
-        _check_input(prompt, image)
-        validator = _validator(schema)
-        return await self._request(prompt, schema, image, validator, on_attempt)
+        try:
+            _check_input(prompt, image)
+            validator = _validator(schema)
+            return await self._request(prompt, schema, image, validator, on_attempt)
+        except (LLMInvalidResponse, LLMTransientError, LLMPermanentError) as error:
+            failure = error
+        _raise_detached(failure)
+
+    async def _close_transport(self) -> None:
+        """종료 실패를 생성 오류와 분리하고 다시 종료할 수 있도록 연결을 남긴다."""
+        if self._transport is None:
+            return
+        await _close_once(self._transport)
+        self._transport = None
 
     async def aclose(self) -> None:
-        """새 요청을 차단하고 진행 중 호출이 끝난 뒤 전송을 한 번 종료한다."""
+        """새 요청을 차단하고 진행 중 호출이 끝난 뒤 전송을 한 번 종료한다.
+
+        활성 전송 Task 안에서 호출하면 LLMPermanentError이며 클라이언트는 닫히지 않는다.
+        네트워크·SDK 종료 실패는 공통 오류로 전달하며 명시적으로 다시 종료할 수 있다.
+        """
+        if asyncio.current_task() in self._active_tasks:
+            _raise_detached(
+                LLMPermanentError("Cannot close Gemini client inside its active request")
+            )
         async with self._close_lock:
             self._closed = True
             async with AsyncExitStack() as stack:
                 for _ in range(self._max_concurrency):
                     await stack.enter_async_context(self._semaphore)
-                if self._transport is not None:
-                    await self._transport.aclose()
-                    self._transport = None
+                with self._active_request():
+                    await self._close_transport()
