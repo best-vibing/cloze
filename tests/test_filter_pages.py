@@ -94,6 +94,11 @@ def test_fixture_header_footer_are_excluded() -> None:
         assert {reasons[token.id] for token in frame} == {"header_footer"}
 
 
+TWOUP = Path(__file__).parent / "fixtures" / "twoup.pdf"
+FOOTER = {"Vibe": "header_footer", "coding": "header_footer"}
+FOOTER |= {"Kwon,": "header_footer", "Bokyung": "header_footer"}
+
+
 def _footer_pages(*footers: str, cover: list[tuple[float, str]] | None = None) -> list[PageTokens]:
     """3쪽짜리 문서. 쪽마다 본문 한 줄과 바닥글 줄(top 0.95, 0.85, …)이 있다. cover는 1쪽에만."""
     pages = []
@@ -175,3 +180,17 @@ def test_footer_line_is_split_at_large_gap() -> None:
         6: "footer_phrase",
         7: "footer_phrase",
     }
+
+
+def test_twoup_fixture_footers_and_cover_phrases_are_excluded() -> None:
+    pages = extract_tokens(TWOUP.read_bytes())
+    reasons = _line_reasons(pages)
+    for page in pages:
+        footer_tops = sorted(t.bbox[1] for t in page.tokens if t.text == "Bokyung")[-2:]
+        assert footer_tops[0] < 0.5 < footer_tops[1]  # 바닥글이 한 쪽에 두 번 나온다
+        assert reasons[page.page.page_no]["Vibe coding Kwon, Bokyung"] == FOOTER
+    assert reasons[1]["Vibe Coding"] == {"Vibe": "footer_phrase", "Coding": "footer_phrase"}
+    assert reasons[1]["Kwon, Bokyung"] == {"Kwon,": "footer_phrase", "Bokyung": "footer_phrase"}
+    assert reasons[1]["AI coding tools"] == {"AI": "too_short"}
+    subtitle = reasons[1]["LLM, and generative AI coding tools"]
+    assert subtitle == {"and": "stopword", "AI": "too_short"}

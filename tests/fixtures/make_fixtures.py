@@ -1,4 +1,4 @@
-"""tests/fixtures/의 sample.pdf와 render.pdf를 표준 라이브러리만으로 만든다.
+"""tests/fixtures/의 sample.pdf, render.pdf, twoup.pdf를 표준 라이브러리만으로 만든다.
 
 실행: uv run python tests/fixtures/make_fixtures.py
 """
@@ -111,6 +111,56 @@ def _sample_pages() -> list[PageSpec]:
     return [(b"", b"", [*_frame(no), *runs]) for no, runs in enumerate(PAGES, start=1)]
 
 
+# 두 장 모아찍기: A4 한 쪽에 슬라이드 두 장. 슬라이드마다 바닥글이 있어 한 쪽에 두 번 나온다.
+# 바닥글은 큰 간격으로 나뉜 구절 두 개("Vibe coding", "Kwon, Bokyung")다.
+# 1쪽 위 슬라이드는 표지라 같은 문구가 대소문자만 다르게 한 번 더 나오고,
+# "AI coding tools"처럼 구절의 일부만 겹치는 제목이 본문에 있다.
+def _slide_footer(y: int) -> list[Run]:
+    return [(REGULAR, 9, 72, y, "Vibe coding"), (REGULAR, 9, 400, y, "Kwon, Bokyung")]
+
+
+TWOUP_SLIDES: list[list[Run]] = [
+    [
+        (BOLD, 28, 72, 700, "Vibe Coding"),
+        (REGULAR, 14, 72, 660, "LLM, and generative AI coding tools"),
+        (REGULAR, 14, 72, 630, "Kwon, Bokyung"),
+    ],
+    [
+        (BOLD, 20, 72, 350, "AI coding tools"),
+        (REGULAR, 12, 72, 320, "An agent calls the model through an API key and returns"),
+        (REGULAR, 12, 72, 300, "tokens that the editor inserts into the file."),
+    ],
+    [
+        (BOLD, 20, 72, 730, "Prompting"),
+        (REGULAR, 12, 72, 700, "A prompt gives the model context, examples and the task,"),
+        (REGULAR, 12, 72, 680, "and the agent plans before it edits the file."),
+    ],
+    [
+        (BOLD, 20, 72, 350, "Agents"),
+        (REGULAR, 12, 72, 320, "An agent loops over tools until the task is done, and the"),
+        (REGULAR, 12, 72, 300, "editor shows every edit for review."),
+    ],
+    [
+        (BOLD, 20, 72, 730, "Context window"),
+        (REGULAR, 12, 72, 700, "The model reads only the tokens inside its context window,"),
+        (REGULAR, 12, 72, 680, "so the agent summarizes long files before coding."),
+    ],
+    [
+        (BOLD, 20, 72, 350, "Evaluation"),
+        (REGULAR, 12, 72, 320, "Tests and review catch errors that the model makes, and"),
+        (REGULAR, 12, 72, 300, "the API key stays outside the repository."),
+    ],
+]
+
+
+def _twoup_pages() -> list[PageSpec]:
+    pairs = zip(TWOUP_SLIDES[::2], TWOUP_SLIDES[1::2], strict=True)
+    return [
+        (b"", b"", [*upper, *_slide_footer(420), *lower, *_slide_footer(30)])
+        for upper, lower in pairs
+    ]
+
+
 def _objects(pages: list[PageSpec]) -> list[bytes]:
     font_ids = {name: 3 + index for index, (name, _) in enumerate(FONTS)}
     first_page_id = 3 + len(FONTS)
@@ -140,6 +190,10 @@ def build_render_pdf() -> bytes:
     return _build(RENDER_PAGES)
 
 
+def build_twoup_pdf() -> bytes:
+    return _build(_twoup_pages())
+
+
 def _build(pages: list[PageSpec]) -> bytes:
     # 머리말의 NUL 바이트: git이 이 파일을 이진으로 보게 해 줄바꿈 변환(autocrlf)을 막는다.
     out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\x00\n")
@@ -159,3 +213,4 @@ def _build(pages: list[PageSpec]) -> bytes:
 if __name__ == "__main__":
     Path(__file__).with_name("sample.pdf").write_bytes(build_sample_pdf())
     Path(__file__).with_name("render.pdf").write_bytes(build_render_pdf())
+    Path(__file__).with_name("twoup.pdf").write_bytes(build_twoup_pdf())
