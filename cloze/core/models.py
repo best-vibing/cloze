@@ -17,6 +17,7 @@ type ExcludeReason = Literal[
     "has_symbol",
     "number",
     "header_footer",
+    "footer_phrase",
 ]
 
 

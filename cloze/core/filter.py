@@ -46,26 +46,32 @@ REPEAT_PAGE_RATIO = 0.5
 MIN_REPEAT_PAGES = 2
 # [가설] 세로 위치(0~1) 차이가 이 값 이하이면 "비슷한 위치"로 본다.
 REPEAT_TOP_TOLERANCE = 0.02
+# [가설] 바닥글 줄 안에서 토큰 사이 가로 간격이 글자 크기의 이 배수를 넘으면 다른 구절로 본다.
+PHRASE_GAP_RATIO = 1.5
+# 토큰 두 개 이상인 구절만 다른 곳과 맞춘다. 한 단어("coding")로 맞추면 본문의 정상 단어까지 빠진다.
+MIN_PHRASE_TOKENS = 2
 
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 _HANGUL = re.compile(r"[가-힣]")
 _DIGITS = re.compile(r"\d+")
 
 type _Line = tuple[int, float, list[int]]  # 페이지 번호, 줄의 top, 토큰 id들
+type _Key = tuple[int, int]  # 페이지 번호, 토큰 id
+type _Phrase = tuple[str, ...]  # 구절을 이루는 단어 key들
 
 
 def filter_candidates(pages: list[PageTokens], policy: Policy) -> list[PageCandidates]:
-    repeated = _repeated_ids(pages)
-    return [_page_candidates(page, repeated, policy) for page in pages]
+    doc_reasons = _document_reasons(pages)
+    return [_page_candidates(page, doc_reasons, policy) for page in pages]
 
 
 def _page_candidates(
-    page: PageTokens, repeated: set[tuple[int, int]], policy: Policy
+    page: PageTokens, doc_reasons: dict[_Key, ExcludeReason], policy: Policy
 ) -> PageCandidates:
     candidate_ids: list[int] = []
     excluded: list[Excluded] = []
     for token in page.tokens:
-        reason = _reason(page.page.page_no, token, repeated, policy)
+        reason = _reason(page.page.page_no, token, doc_reasons, policy)
         if reason is None:
             candidate_ids.append(token.id)
         else:
@@ -74,14 +80,24 @@ def _page_candidates(
 
 
 def _reason(
-    page_no: int, token: Token, repeated: set[tuple[int, int]], policy: Policy
+    page_no: int, token: Token, doc_reasons: dict[_Key, ExcludeReason], policy: Policy
 ) -> ExcludeReason | None:
-    if (page_no, token.id) in repeated:
-        return "header_footer"
-    return token_reason(token.text, policy.include_numbers)
+    doc_reason = doc_reasons.get((page_no, token.id))
+    return doc_reason or token_reason(token.text, policy.include_numbers)
 
 
-def _repeated_ids(pages: list[PageTokens]) -> set[tuple[int, int]]:
+def _document_reasons(pages: list[PageTokens]) -> dict[_Key, ExcludeReason]:
+    """문서 전체를 봐야 아는 제외 사유. 반복 머리글·바닥글이 먼저이고, 그 문구가 다른 곳에
+    구절 전체로 나온 토큰은 footer_phrase다."""
+    repeated = _repeated_ids(pages)
+    reasons: dict[_Key, ExcludeReason] = dict.fromkeys(repeated, "header_footer")
+    phrases = _footer_phrases(pages, repeated)
+    for key in _phrase_ids(pages, phrases):
+        reasons.setdefault(key, "footer_phrase")
+    return reasons
+
+
+def _repeated_ids(pages: list[PageTokens]) -> set[_Key]:
     """여러 페이지의 비슷한 위치에 반복되는 줄의 (페이지 번호, 토큰 id)를 모은다.
     기준을 넘는 위치 묶음은 모두 뺀다. 두 장 모아찍기 PDF는 바닥글이 한 쪽에 두 번 나온다."""
     needed = max(MIN_REPEAT_PAGES, math.ceil(len(pages) * REPEAT_PAGE_RATIO))
@@ -89,7 +105,7 @@ def _repeated_ids(pages: list[PageTokens]) -> set[tuple[int, int]]:
     for page in pages:
         for text, line in _lines(page):
             lines_by_text[text].append(line)
-    repeated: set[tuple[int, int]] = set()
+    repeated: set[_Key] = set()
     for lines in lines_by_text.values():
         for cluster in _clusters(lines):
             if len({page_no for page_no, _, _ in cluster}) >= needed:
@@ -97,11 +113,16 @@ def _repeated_ids(pages: list[PageTokens]) -> set[tuple[int, int]]:
     return repeated
 
 
-def _lines(page: PageTokens) -> list[tuple[str, _Line]]:
+def _line_tokens(page: PageTokens) -> list[list[Token]]:
+    """줄마다 토큰을 읽는 순서대로 묶는다."""
     tokens_by_line: dict[int, list[Token]] = defaultdict(list)
     for token in page.tokens:
         tokens_by_line[token.line_id].append(token)
-    return [_line(page.page.page_no, tokens) for tokens in tokens_by_line.values()]
+    return list(tokens_by_line.values())
+
+
+def _lines(page: PageTokens) -> list[tuple[str, _Line]]:
+    return [_line(page.page.page_no, tokens) for tokens in _line_tokens(page)]
 
 
 def _line(page_no: int, tokens: list[Token]) -> tuple[str, _Line]:
@@ -117,6 +138,62 @@ def _clusters(lines: list[_Line]) -> list[list[_Line]]:
         [line for line in lines if abs(line[1] - anchor[1]) <= REPEAT_TOP_TOLERANCE]
         for anchor in lines
     ]
+
+
+def _footer_phrases(pages: list[PageTokens], repeated: set[_Key]) -> set[_Phrase]:
+    """머리글·바닥글로 확인된 줄의 문구를 구절로 모은다."""
+    phrases: set[_Phrase] = set()
+    for page in pages:
+        for tokens in _line_tokens(page):
+            if all((page.page.page_no, token.id) in repeated for token in tokens):
+                phrases |= set(_split_phrases(page, tokens))
+    return phrases
+
+
+def _split_phrases(page: PageTokens, tokens: list[Token]) -> list[_Phrase]:
+    """줄을 구분 기호나 큰 간격에서 나눠, 토큰 두 개 이상인 구절만 돌려준다."""
+    phrases: list[list[str]] = [[]]
+    previous: Token | None = None
+    for token in tokens:
+        if _starts_new_phrase(page, previous, token):
+            phrases.append([])
+        if not _is_separator(token.text):
+            phrases[-1].append(word_key(token.text))
+        previous = token
+    return [tuple(words) for words in phrases if len(words) >= MIN_PHRASE_TOKENS]
+
+
+def _starts_new_phrase(page: PageTokens, previous: Token | None, token: Token) -> bool:
+    if _is_separator(token.text):
+        return True
+    if previous is None:
+        return False
+    gap_pt = (token.bbox[0] - previous.bbox[2]) * page.page.width_pt
+    return gap_pt > token.font_size * PHRASE_GAP_RATIO
+
+
+def _is_separator(text: str) -> bool:
+    return not any(char.isalnum() for char in text)
+
+
+def _phrase_ids(pages: list[PageTokens], phrases: set[_Phrase]) -> set[_Key]:
+    """바닥글 구절이 구절 전체로 나오는 줄의 토큰을 모은다. 구절은 줄을 넘지 않는다."""
+    matched: set[_Key] = set()
+    for page in pages:
+        for tokens in _line_tokens(page):
+            matched |= {(page.page.page_no, t.id) for t in _matching_tokens(tokens, phrases)}
+    return matched
+
+
+def _matching_tokens(tokens: list[Token], phrases: set[_Phrase]) -> list[Token]:
+    keys = [word_key(token.text) for token in tokens]
+    hits: list[Token] = []
+    for phrase in phrases:
+        size = len(phrase)
+        for start in range(len(keys) - size + 1):
+            if tuple(keys[start : start + size]) == phrase:
+                hits += tokens[start : start + size]
+    return hits
 
 
 def normalize_ko(text: str) -> str:
