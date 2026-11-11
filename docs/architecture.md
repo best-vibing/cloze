@@ -328,7 +328,7 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 비밀값(API 키, DB 비밀번호, 세션 서명 키, 이미지 서명 키, GitHub Container Registry 읽기 토큰)은 환경 변수로 주입하고 레포에는 예시 파일만 둔다.
 
 - **노출:** 시연 기기(팀원 기기)의 호스트에 Tailscale을 설치하고 `api` 포트를 노출한다. 개발 중에는 Serve(같은 tailnet의 팀원만), 발표·리허설 때만 Funnel(누구나). HTTPS는 Tailscale이 맡는다.
-- **CD(끌어오기):** `develop` 머지 → CI 통과 → GitHub Container Registry에 이미지 → 시연 기기가 켜져 있는 동안 주기적으로 확인해 `docker compose up -d`로 교체(이때 `migrate`가 먼저 돈다). 레포가 비공개라 이미지도 비공개이므로, 시연 기기에는 `read:packages` 권한만 있는 토큰을 둔다. 개인 기기에서 GitHub 실행기(self-hosted runner)는 돌리지 않는다.
+- **CD(끌어오기):** `develop` 머지 → CI 통과 → GitHub Container Registry에 이미지 → 시연 기기가 켜져 있는 동안 주기적으로 확인해 `docker compose up -d`로 교체(이때 `migrate`가 먼저 돈다). 레포는 공개다(2026-11-11 확인). 이미지를 공개로 둘지, 비공개로 두고 시연 기기에 `read:packages` 권한만 있는 토큰을 둘지는 배포 작업([#60](https://github.com/best-vibing/cloze/issues/60))에서 정한다. 개인 기기에서 GitHub 실행기(self-hosted runner)는 돌리지 않는다.
 - **발표 설정:** 발표 때는 환경 변수로 한도를 바꿔 다시 띄운다(값은 [신뢰성 설계](design/reliability.md) 5.1). 서비스 전체 Gemini 한도는 그대로 둔다.
 - **클라우드 이전:** 평가 기준이 요구하면 같은 Compose를 VPS로 옮긴다. 공개 주소는 Funnel을 그대로 쓰거나 Caddy를 앞에 둔다. 근거와 검토한 대안은 [ADR-007](decisions/ADR-007-deploy-demo-machine-tailscale.md).
 
