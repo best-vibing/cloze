@@ -12,6 +12,7 @@ from cloze.core.models import (
     Policy,
     Token,
 )
+from cloze.core.question_region import question_region_ids
 
 STOPWORDS_EN = frozenset(
     "about above after all also and any are because been before being but can could did does "
@@ -88,13 +89,20 @@ def _reason(
 
 def _document_reasons(pages: list[PageTokens]) -> dict[_Key, ExcludeReason]:
     """문서 전체를 봐야 아는 제외 사유. 반복 머리글·바닥글이 먼저이고, 그 문구가 다른 곳에
-    구절 전체로 나온 토큰은 footer_phrase다."""
+    구절 전체로 나온 토큰은 footer_phrase, 문제·예시 슬라이드 영역의 토큰은 question_region이다."""
     repeated = _repeated_ids(pages)
     reasons: dict[_Key, ExcludeReason] = dict.fromkeys(repeated, "header_footer")
     phrases = _footer_phrases(pages, repeated)
     for key in _phrase_ids(pages, phrases):
         reasons.setdefault(key, "footer_phrase")
+    for key in question_region_ids(pages, repeated):
+        reasons.setdefault(key, "question_region")
     return reasons
+
+
+def excluded_count(candidates: PageCandidates, reason: ExcludeReason) -> int:
+    """사유별 제외 수. 문제 영역 몫을 목표 개수의 분모에서 빼는 데 쓴다(#66)."""
+    return sum(1 for item in candidates.excluded if item.reason == reason)
 
 
 def _repeated_ids(pages: list[PageTokens]) -> set[_Key]:
