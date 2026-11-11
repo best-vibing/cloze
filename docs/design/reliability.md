@@ -28,7 +28,7 @@
 1. 작업을 시작하면 `blank_sets.run_count`를 1 올린다.
 2. `run_count`가 상한(4회 [가설]: 첫 실행 + 재시도 2 + 재배달 여유 1)을 넘으면 처리하지 않고 `failed`(`processing_failed`)로 기록한 뒤 ack한다. 매번 워커를 죽이는 PDF가 끝없이 재배달되는 것(독 메시지)을 이 규칙이 끊는다.
 3. 일시적 오류(`LLMTransientError`)나 작업 제한 시간 초과가 나면, `run_count`가 상한에 닿았으면 `failed`(`processing_failed`)로 기록하고 정상 종료한다. 아니면 예외를 다시 던져 재시도에 맡긴다. 미들웨어의 재시도 횟수는 이 상한보다 크게 둬서 판단을 Postgres 쪽이 하게 한다.
-4. 정리 작업이 `queued`·`running`인 채로 `updated_at`이 30분 [가설] 넘게 멈춘 세트를 찾는다. Redis에서 작업이 사라진 경우(AOF가 저장하기 전의 재시작 등)다. 다시 등록하고, `run_count`가 상한이면 `failed`로 끝낸다. 같은 정리 작업이 DB 행이 없는 원본 파일(저장 뒤 DB 기록에 실패한 업로드)도 지운다.
+4. 정리 작업이 `queued`·`running`인 채로 `updated_at`이 30분 [가설] 넘게 멈춘 세트를 찾는다. Redis에서 작업이 사라진 경우(AOF가 저장하기 전의 재시작 등)다. 다시 등록하고, `run_count`가 상한이면 `failed`로 끝낸다. 같은 정리 작업이 DB 행이 없는 원본 파일(저장 뒤 DB 기록에 실패한 업로드)도 지운다. **재등록은 정리 작업 한 곳에서만 한다.** 워커 작업은 재등록하지 않는다. 정리 작업은 스케줄러 한 개가 주기적으로 등록한다([ADR-011](../decisions/ADR-011-periodic-jobs-scheduler.md)).
 
 ## 2. 시간 설정 (초기값)
 
