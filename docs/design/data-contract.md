@@ -52,6 +52,22 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `LLMInvalidResponse` | 응답을 파싱할 수 없거나 스키마와 다름 | 검증 실패로 취급: 사유를 붙여 1회 재시도 → 규칙 기반 | 계속 진행 |
 | `LLMPermanentError` | 인증 실패, 설정 오류, 없는 모델 | 그 세트의 남은 페이지는 LLM을 부르지 않고 규칙 기반으로 만든다. 분석이면 기본 방식 | 계속 진행. 운영 경보를 즉시 보낸다 |
 
+#### 생성 시도 기록 (선택)
+
+`GeminiClient.ask_llm(prompt, schema, image=None, *, on_attempt=None)`의 반환값은
+기존과 같은 검증된 dict다. `on_attempt: Callable[[LLMAttempt], None] | None`은
+완료된 전송 시도마다 한 번 호출되는 동기 콜백이며, 자료형의 기준은
+[`LLMAttempt`와 `GeminiResponse`](../../cloze/infra/gemini.py)다.
+`attempt`는 ask_llm 호출마다 1부터 시작하고 `outcome`은 `ok`, `invalid`,
+`transient`, `permanent`다. 파싱·스키마 실패도 `invalid`로 기록한다.
+`latency_ms`는 단조 시계로 잰 시도 시간이며 슬롯 대기·백오프·콜백 시간은 제외한다.
+`model`은 설정된 생성 모델이다. `input_tokens`/`output_tokens`는 SDK의 실제
+`usage_metadata.prompt_token_count`/`candidates_token_count`이며 추론 토큰은 합산하지 않는다.
+누락·비정상 값은 None, 실제 0은 0이다. `count_tokens()`의 사전 추정값을 사용하지 않는다.
+기존 문자열 Fake Transport도 지원하며 그 사용량은 None이다.
+취소는 그대로 전파하고 취소된 전송·입력 검증·종료 후 요청 거절에는 완료 기록을 만들지 않는다.
+콜백 예외는 그대로 전파하며 추가 전송하지 않는다. 워커 콜백은 빠르게 기록을 수집해야 한다.
+
 ### 1.4 페이지 결과(최종 출력)
 
 `pipeline`의 출력이다. `cli`는 이 모양을 JSON 파일로 저장하고, 프론트 스파이크는 이 파일을 가짜 데이터로 쓴다.
@@ -173,6 +189,12 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 한도의 초기값은 [신뢰성 설계](reliability.md) 5절에 둔다.
 
 ## 4. 데이터 모델
+
+워커는 요청별 리스트의 `append`를 `on_attempt`로 전달하고, 실패 시에도 수집한 기록을
+`llm_calls`에 저장할 수 있다. 각 기록에 `set_id`, `page_no`, `kind`, `created_at`을
+워커가 붙인다. `attempt`는 개별 ask_llm 내 번호이므로 파이프라인의 재호출은 워커가 구분한다.
+동시 작업은 별도 리스트/콜백을 사용한다. 키·프롬프트·응답 본문·원본 예외는 저장하지 않는다.
+DB 저장과 콜백 실패 복구는 이번 변경 범위에 포함하지 않는다.
 
 ```
 users 1─N documents 1─N blank_sets 1─N blanks
