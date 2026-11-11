@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -57,3 +58,10 @@ def test_font_attributes(pages: list[PageTokens]) -> None:
 
 def test_korean_text_is_extracted(pages: list[PageTokens]) -> None:
     assert "역전파는" in [token.text for token in pages[2].tokens]
+
+
+def test_upright_extraction_matches_select_cli_baseline(pages: list[PageTokens]) -> None:
+    # sample.tokens.json은 feat/select-cli(3e78ddf) 시점 코드로 뽑은 결과다.
+    # 좌표 기준·회전 처리를 바꿔도 직립 페이지의 결과가 그대로인지 확인한다.
+    baseline = json.loads((SAMPLE.parent / "sample.tokens.json").read_text(encoding="utf-8"))
+    assert [page.model_dump(mode="json") for page in pages] == baseline
