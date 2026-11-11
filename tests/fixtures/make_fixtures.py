@@ -5,7 +5,7 @@
 
 from pathlib import Path
 
-type Run = tuple[str, int, int, int, str]  # 폰트, 크기, x, y, 글
+type Run = tuple[str, int, float, int, str]  # 폰트, 크기, x, y, 글
 
 REGULAR, BOLD, KOREAN = "R", "B", "K"
 FONTS = (
@@ -111,6 +111,29 @@ def _sample_pages() -> list[PageSpec]:
     return [(b"", b"", [*_frame(no), *runs]) for no, runs in enumerate(PAGES, start=1)]
 
 
+# 한국어 강의자료처럼 띄어쓰기를 공백 글자 없이 글자 크기의 0.29배 간격으로만 둔 줄.
+# CID 폰트의 기본 글자 폭이 1em이라 다음 어절의 x는 글자 수 × 크기 + 간격이다.
+KOREAN_GAP_EM = 0.29
+
+
+def _spaced(size: int, y: int, words: list[str]) -> list[Run]:
+    runs: list[Run] = []
+    x = 72.0
+    for word in words:
+        runs.append((KOREAN, size, round(x, 2), y, word))
+        x += len(word) * size + KOREAN_GAP_EM * size
+    return runs
+
+
+def _korean_runs() -> list[Run]:
+    return [
+        *_spaced(10, 700, ["인공지능은", "데이터를", "학습한다"]),
+        *_spaced(14, 670, ["확률", "변수의", "분포"]),
+        (KOREAN, 10, 72, 640, "역전파는"),  # 어절 안 글자는 간격 0이라 하나로 남는다
+        (REGULAR, 10, 72, 610, "gradient descent uses the learning rate"),
+    ]
+
+
 def _objects(pages: list[PageSpec]) -> list[bytes]:
     font_ids = {name: 3 + index for index, (name, _) in enumerate(FONTS)}
     first_page_id = 3 + len(FONTS)
@@ -140,6 +163,10 @@ def build_render_pdf() -> bytes:
     return _build(RENDER_PAGES)
 
 
+def build_korean_pdf() -> bytes:
+    return _build([(b"", b"", _korean_runs())])
+
+
 def _build(pages: list[PageSpec]) -> bytes:
     # 머리말의 NUL 바이트: git이 이 파일을 이진으로 보게 해 줄바꿈 변환(autocrlf)을 막는다.
     out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\x00\n")
@@ -159,3 +186,4 @@ def _build(pages: list[PageSpec]) -> bytes:
 if __name__ == "__main__":
     Path(__file__).with_name("sample.pdf").write_bytes(build_sample_pdf())
     Path(__file__).with_name("render.pdf").write_bytes(build_render_pdf())
+    Path(__file__).with_name("korean.pdf").write_bytes(build_korean_pdf())

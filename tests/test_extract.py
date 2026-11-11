@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from cloze.core.extract import extract_tokens
+from cloze.core.extract import EXTRACT_VERSION, extract_tokens
 from cloze.core.models import PageTokens
 
 SAMPLE = Path(__file__).parent / "fixtures" / "sample.pdf"
@@ -65,3 +65,23 @@ def test_upright_extraction_matches_select_cli_baseline(pages: list[PageTokens])
     # 좌표 기준·회전 처리를 바꿔도 직립 페이지의 결과가 그대로인지 확인한다.
     baseline = json.loads((SAMPLE.parent / "sample.tokens.json").read_text(encoding="utf-8"))
     assert [page.model_dump(mode="json") for page in pages] == baseline
+
+
+KOREAN = Path(__file__).parent / "fixtures" / "korean.pdf"
+
+
+def test_korean_words_split_at_gap_without_space_char() -> None:
+    # 띄어쓰기가 공백 글자 없이 0.29em 간격으로만 저장된 줄.
+    # pdfplumber 기본 x_tolerance(3pt)면 10pt 줄의 어절이 붙는다.
+    page = extract_tokens(KOREAN.read_bytes())[0]
+    lines: dict[int, list[str]] = {}
+    for token in page.tokens:
+        lines.setdefault(token.line_id, []).append(token.text)
+    assert lines[0] == ["인공지능은", "데이터를", "학습한다"]
+    assert lines[1] == ["확률", "변수의", "분포"]
+    assert lines[2] == ["역전파는"]  # 어절 안 글자(간격 0)는 나뉘지 않는다
+    assert lines[3] == ["gradient", "descent", "uses", "the", "learning", "rate"]
+
+
+def test_extract_version_is_bumped_for_word_splitting() -> None:
+    assert EXTRACT_VERSION == 2
