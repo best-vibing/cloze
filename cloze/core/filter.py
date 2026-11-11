@@ -82,7 +82,8 @@ def _reason(
 
 
 def _repeated_ids(pages: list[PageTokens]) -> set[tuple[int, int]]:
-    """여러 페이지의 비슷한 위치에 반복되는 줄의 (페이지 번호, 토큰 id)를 모은다."""
+    """여러 페이지의 비슷한 위치에 반복되는 줄의 (페이지 번호, 토큰 id)를 모은다.
+    기준을 넘는 위치 묶음은 모두 뺀다. 두 장 모아찍기 PDF는 바닥글이 한 쪽에 두 번 나온다."""
     needed = max(MIN_REPEAT_PAGES, math.ceil(len(pages) * REPEAT_PAGE_RATIO))
     lines_by_text: dict[str, list[_Line]] = defaultdict(list)
     for page in pages:
@@ -90,9 +91,9 @@ def _repeated_ids(pages: list[PageTokens]) -> set[tuple[int, int]]:
             lines_by_text[text].append(line)
     repeated: set[tuple[int, int]] = set()
     for lines in lines_by_text.values():
-        cluster = _largest_cluster(lines)
-        if len({page_no for page_no, _, _ in cluster}) >= needed:
-            repeated |= {(page_no, id_) for page_no, _, ids in cluster for id_ in ids}
+        for cluster in _clusters(lines):
+            if len({page_no for page_no, _, _ in cluster}) >= needed:
+                repeated |= {(page_no, id_) for page_no, _, ids in cluster for id_ in ids}
     return repeated
 
 
@@ -110,13 +111,12 @@ def _line(page_no: int, tokens: list[Token]) -> tuple[str, _Line]:
     return text, (page_no, top, [token.id for token in tokens])
 
 
-def _largest_cluster(lines: list[_Line]) -> list[_Line]:
-    """줄마다 기준으로 삼아 보고, 위치가 비슷한 줄이 가장 많은 묶음을 돌려준다."""
-    clusters = (
+def _clusters(lines: list[_Line]) -> list[list[_Line]]:
+    """줄마다 기준으로 삼아, 위치가 비슷한 줄의 묶음을 하나씩 돌려준다. 묶음이 겹쳐도 된다."""
+    return [
         [line for line in lines if abs(line[1] - anchor[1]) <= REPEAT_TOP_TOLERANCE]
         for anchor in lines
-    )
-    return max(clusters, key=len)
+    ]
 
 
 def normalize_ko(text: str) -> str:

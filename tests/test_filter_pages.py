@@ -92,3 +92,21 @@ def test_fixture_header_footer_are_excluded() -> None:
         assert [token.text for token in frame[:3]] == ["Cloze", "Sample", "Handbook"]
         assert [token.text for token in frame[3:]][0] == "Page"
         assert {reasons[token.id] for token in frame} == {"header_footer"}
+
+
+def _footer_pages(*footers: str, cover: list[tuple[float, str]] | None = None) -> list[PageTokens]:
+    """3쪽짜리 문서. 쪽마다 본문 한 줄과 바닥글 줄(top 0.95, 0.85, …)이 있다. cover는 1쪽에만."""
+    pages = []
+    for no in range(1, 4):
+        lines = [*(cover or [] if no == 1 else []), (0.5, f"body{'x' * no}")]
+        lines += [(0.95 - 0.1 * index, footer) for index, footer in enumerate(footers)]
+        pages.append(_page(no, lines))
+    return pages
+
+
+def test_every_repeated_position_is_excluded() -> None:
+    # 두 장 모아찍기 PDF는 바닥글이 한 쪽에 두 번(top 0.95, 0.85) 나온다. 둘 다 빠져야 한다.
+    pages = _footer_pages("Vibe coding", "Vibe coding")
+    for result in filter_candidates(pages, POLICY):
+        assert result.candidate_ids == [0]
+        assert [item.reason for item in result.excluded] == ["header_footer"] * 4
