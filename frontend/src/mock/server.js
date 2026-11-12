@@ -5,9 +5,11 @@
 //   (없음)        queued → running → done
 //   partial       queued → running → partial (2쪽 처리 실패)
 //   failed        queued → running → failed (unreadable_pdf)
+//   unauthorized  로그인 전 상태. 로그인 외 모든 요청이 401 unauthorized
 // 처리 중(queued·running)인 세트에 답안을 내면 어느 시나리오든 409 not_ready다.
 
 export const DEMO_SET_ID = "6f1c2a4e-0000-4000-8000-000000000001";
+const DEMO_DOCUMENT_ID = "0d0c0000-0000-4000-8000-000000000001";
 const LATENCY_MS = 200;
 const POLLS_UNTIL_FINISHED = 2; // 조회 1번째 queued, 2번째 running, 3번째부터 끝난 상태
 
@@ -30,11 +32,20 @@ const PAGES = [
 ];
 
 const state = {
-  sets: new Map([[DEMO_SET_ID, newSet("auto")]]),
+  loggedIn: scenario !== "unauthorized",
+  sets: new Map([[DEMO_SET_ID, newSet(DEMO_DOCUMENT_ID, "auto")]]),
+  documents: new Map([[DEMO_DOCUMENT_ID, { filename: "세포생물학-3주차.pdf", sets: [DEMO_SET_ID] }]]),
   attempts: new Map(), // attempt_id → {set_id, submitted_at, score, after_reveal, revealed_at}
+  idempotency: new Map(), // Idempotency-Key → 처음 돌려준 응답
 };
 
 const ROUTES = [
+  ["POST", /^\/auth\/login$/, login],
+  ["POST", /^\/auth\/logout$/, () => { state.loggedIn = false; return reply(204); }],
+  ["GET", /^\/documents$/, listDocuments],
+  ["POST", /^\/documents$/, uploadDocument],
+  ["DELETE", /^\/documents\/([^/]+)$/, deleteDocument],
+  ["POST", /^\/documents\/([^/]+)\/blank-sets$/, remakeBlankSet],
   ["GET", /^\/blank-sets\/([^/]+)$/, getBlankSet],
   ["POST", /^\/blank-sets\/([^/]+)\/attempts$/, submitAttempt],
   ["GET", /^\/blank-sets\/([^/]+)\/attempts$/, listAttempts],
@@ -47,12 +58,63 @@ export async function handle(method, path, init) {
   for (const [m, pattern, handler] of ROUTES) {
     const match = method === m && path.match(pattern);
     if (!match) continue;
+    if (handler !== login && !state.loggedIn) return error(401, "unauthorized", "로그인이 필요해요.");
     return handler(init, ...match.slice(1));
   }
   return error(404, "not_found", "찾을 수 없어요.");
 }
 
 // ---- 핸들러 ----
+
+function login(init) {
+  const { login_id, password } = JSON.parse(init.body);
+  if (!login_id || !password) {
+    return error(401, "invalid_credentials", "아이디 또는 비밀번호가 맞지 않아요.");
+  }
+  state.loggedIn = true;
+  return reply(204);
+}
+
+function listDocuments() {
+  // [가정] 계약 2절은 "문서마다 세트 요약"만 정한다. 문서 쪽 필드 이름은 #54 응답이 나오면 맞춘다.
+  const documents = [...state.documents].map(([document_id, doc]) => ({
+    document_id,
+    filename: doc.filename,
+    blank_sets: doc.sets.map((id) => {
+      const set = state.sets.get(id);
+      return { blank_set_id: id, preset_applied: set.preset_applied, status: statusOf(set), created_at: set.created_at };
+    }),
+  }));
+  return reply(200, documents);
+}
+
+function uploadDocument(init) {
+  return once(init, () => {
+    const file = init.body.get("file");
+    if (!file?.name?.toLowerCase().endsWith(".pdf")) return error(415, "not_pdf", "PDF 파일만 올릴 수 있어요.");
+    const documentId = crypto.randomUUID();
+    const setId = crypto.randomUUID();
+    state.sets.set(setId, newSet(documentId, init.body.get("preset") ?? "auto"));
+    state.documents.set(documentId, { filename: file.name, sets: [setId] });
+    return reply(202, { document_id: documentId, blank_set_id: setId });
+  });
+}
+
+function deleteDocument(_init, documentId) {
+  if (!state.documents.delete(documentId)) return notFound();
+  return reply(204);
+}
+
+function remakeBlankSet(init, documentId) {
+  const doc = state.documents.get(documentId);
+  if (!doc) return notFound();
+  return once(init, () => {
+    const setId = crypto.randomUUID();
+    state.sets.set(setId, newSet(documentId, JSON.parse(init.body).preset ?? "auto"));
+    doc.sets.push(setId);
+    return reply(202, { blank_set_id: setId });
+  });
+}
 
 function getBlankSet(_init, setId) {
   const set = state.sets.get(setId);
@@ -147,8 +209,9 @@ function placeholderImage(pageNo) {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-function newSet(preset) {
+function newSet(documentId, preset) {
   return {
+    document_id: documentId,
     preset_requested: preset,
     preset_applied: preset === "auto" ? "concept" : preset,
     created_at: new Date().toISOString(),
@@ -171,6 +234,14 @@ function shownBlankIds(set) {
 function same(given, answer) {
   const norm = (s) => s.normalize("NFKC").trim().toLowerCase();
   return norm(given) !== "" && norm(given) === norm(answer);
+}
+
+/** 같은 Idempotency-Key로 다시 오면 새로 만들지 않고 처음 응답을 그대로 돌려준다(계약 2절). */
+function once(init, create) {
+  const key = init.headers["Idempotency-Key"];
+  if (!key) return error(422, "invalid_request", "요청에 Idempotency-Key가 없어요.");
+  if (!state.idempotency.has(key)) state.idempotency.set(key, create());
+  return state.idempotency.get(key).clone();
 }
 
 function reply(status, body) {
