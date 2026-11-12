@@ -226,6 +226,12 @@ function onKeydown(event, submit) {
  */
 async function submitAnswers(server, statusEl, button) {
   if (button.disabled) return;
+  // 마지막 채점 뒤 고친 칸이 없으면(모든 칸에 결과 표시가 남아 있으면) 같은 답으로 시도를 또 만들지 않는다.
+  // 요청 중 잠금만으로는 응답이 온 뒤 누른 Enter를 막지 못한다.
+  if ([...document.querySelectorAll(".blank")].every((i) => i.dataset.result)) {
+    statusEl.textContent = `${statusEl.dataset.summary} 바뀐 칸이 없어 다시 채점하지 않았어요.`;
+    return;
+  }
   button.disabled = true;
   try {
     await gradeAndShow(server, statusEl);
@@ -246,9 +252,8 @@ async function gradeAndShow(server, statusEl) {
     input.setAttribute("aria-invalid", String(result !== "correct"));
   }
   const near = count.near ? `, 거의 맞음 ${count.near}칸` : "";
-  statusEl.textContent =
-    `${inputs.length}칸 중 ${count.correct}칸 정답(${Math.round(score * 100)}점)${near}. ` +
-    "고친 칸은 표시가 지워지고, 다시 확인할 수 있어요.";
+  statusEl.dataset.summary = `${inputs.length}칸 중 ${count.correct}칸 정답(${Math.round(score * 100)}점)${near}.`;
+  statusEl.textContent = `${statusEl.dataset.summary} 고친 칸은 표시가 지워지고, 다시 확인할 수 있어요.`;
 }
 
 /** 결과를 받은 칸을 고치면 그 칸의 표시를 지운다. */
