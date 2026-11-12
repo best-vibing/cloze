@@ -105,7 +105,7 @@ VALIDATION_CASES: list[tuple[Callable[..., str | None], dict[str, int], str, int
 
 
 @pytest.mark.parametrize(("check", "valid", "name", "minimum"), VALIDATION_CASES)
-@pytest.mark.parametrize("invalid", [1.0, 0.5, "1", True, False, None])
+@pytest.mark.parametrize("invalid", [1.0, 0.5, "1", True, False, None, [], {}, (), {1}, 1j, b"1"])
 def test_rejects_noninteger_inputs(
     check: Callable[..., str | None],
     valid: dict[str, int],
@@ -130,4 +130,45 @@ def test_rejects_out_of_range_inputs(
 ) -> None:
     inputs = {**valid, name: minimum - distance}
     with pytest.raises(ValueError, match=name):
+        check(**inputs)
+
+
+@pytest.mark.parametrize("count", [2**63, 10**100])
+def test_large_integer_boundaries(count: int) -> None:
+    """Arbitrary precision daily totals preserve both boundary decisions."""
+    assert check_daily_page_limit(count, count, 2 * count) is None
+    assert check_daily_page_limit(count, count, 2 * count - 1) == "daily_limit_exceeded"
+
+
+@pytest.mark.parametrize("count", [2**63, 10**100])
+def test_large_concurrent_boundaries(count: int) -> None:
+    """Large active counts include exactly one new set."""
+    assert check_concurrent_set_limit(count, count + 1) is None
+    assert check_concurrent_set_limit(count, count) == "too_many_running"
+
+
+@pytest.mark.parametrize("count", [2**63, 10**100])
+def test_large_service_boundaries(count: int) -> None:
+    """All three service terms retain arbitrary precision."""
+    assert check_service_gemini_limit(count, count, count, 3 * count) is None
+    assert (
+        check_service_gemini_limit(count, count, count, 3 * count - 1) == "service_limit_exceeded"
+    )
+
+
+def test_recorded_retries_are_not_collapsed_into_pages() -> None:
+    """Two failed attempts and one success consume three recorded calls."""
+    assert check_service_gemini_limit(3, 1, 1, 5) is None
+    assert check_service_gemini_limit(3, 1, 1, 4) == "service_limit_exceeded"
+
+
+@pytest.mark.parametrize(("check", "valid", "name", "minimum"), VALIDATION_CASES)
+def test_validation_precedes_limit_exceeded(
+    check: Callable[..., str | None], valid: dict[str, int], name: str, minimum: int
+) -> None:
+    """An exceeded total must not hide another parameter's invalid type."""
+    inputs = {key: 10**100 for key in valid}
+    inputs["limit"] = 1
+    inputs[name] = cast(int, None)
+    with pytest.raises(TypeError, match=name):
         check(**inputs)
