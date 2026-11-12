@@ -43,5 +43,10 @@ max-complexity = 10
 python_version = "3.13"
 strict = true
 
+[[tool.mypy.overrides]]
+# pypdfium2는 타입 정보(py.typed)를 제공하지 않는다.
+module = ["pypdfium2", "pypdfium2.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
