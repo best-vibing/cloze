@@ -9,6 +9,7 @@
   let values = $state({}); // blank_id → 입력
   let results = $state({}); // blank_id → correct / near / wrong
   let status = $state("");
+  let summary = ""; // 마지막 채점 결과 한 줄
   let hint = $state("");
   let submitting = $state(false);
   let debug = $state(false);
@@ -40,6 +41,11 @@
   /** 응답을 기다리는 동안에는 다시 제출하지 않는다. */
   async function submit() {
     if (submitting) return;
+    // 마지막 채점 뒤 고친 칸이 없으면(모든 칸에 결과가 남아 있으면) 같은 답으로 시도를 또 만들지 않는다.
+    if (order.length && order.every((id) => results[id])) {
+      status = `${summary} 바뀐 칸이 없어 다시 채점하지 않았어요.`;
+      return;
+    }
     submitting = true;
     try {
       const answers = Object.fromEntries(order.map((id) => [id, values[id] ?? ""]));
@@ -48,9 +54,8 @@
       const count = { correct: 0, near: 0, wrong: 0 };
       for (const v of Object.values(res.results)) count[v] += 1;
       const near = count.near ? `, 거의 맞음 ${count.near}칸` : "";
-      status =
-        `${order.length}칸 중 ${count.correct}칸 정답(${Math.round(res.score * 100)}점)${near}. ` +
-        "고친 칸은 표시가 지워지고, 다시 확인할 수 있어요.";
+      summary = `${order.length}칸 중 ${count.correct}칸 정답(${Math.round(res.score * 100)}점)${near}.`;
+      status = `${summary} 고친 칸은 표시가 지워지고, 다시 확인할 수 있어요.`;
     } finally {
       submitting = false;
     }
