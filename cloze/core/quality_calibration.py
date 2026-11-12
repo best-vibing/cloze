@@ -14,6 +14,31 @@ LABELS = ("좋음", "애매", "나쁨")
 _OPERATORS = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": operator.ge}
 
 
+def _validate_sequence(value: object) -> None:
+    """Reject scalar and text inputs before sequence operations."""
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise ValueError("Expected a non-text sequence")
+
+
+def _validate_sample(sample: object) -> None:
+    """Require exactly the three fields of a calibration sample."""
+    _validate_sequence(sample)
+    if not isinstance(sample, (tuple, list)) or len(sample) != 3:
+        raise ValueError("Each sample needs exactly key, label and numeric value")
+
+
+def _validate_sequences(*values: object) -> None:
+    """Validate aligned input containers before reading their lengths."""
+    for value in values:
+        _validate_sequence(value)
+
+
+def _comparison(comparison: str) -> None:
+    """Validate the explicit comparison operator before dictionary lookup."""
+    if not isinstance(comparison, str) or comparison not in _OPERATORS:
+        raise ValueError("Comparison must be <, <=, > or >=")
+
+
 def _number(value: float) -> float:
     if type(value) not in (int, float):
         raise ValueError("Expected a finite number, not a boolean or string")
@@ -71,6 +96,7 @@ def evaluate_removals(
     Raises:
         ValueError: Lengths differ, keys repeat, or labels/decisions are invalid.
     """
+    _validate_sequences(keys, labels, removed)
     if not len(keys) == len(labels) == len(removed):
         raise ValueError("Keys, labels and removal decisions must have equal lengths")
     _unique_keys(keys)
@@ -140,12 +166,14 @@ def compare_thresholds(
     Raises:
         ValueError: Operator, numeric values or evaluation inputs are invalid.
     """
-    if comparison not in _OPERATORS:
-        raise ValueError("Comparison must be <, <=, > or >=")
+    _comparison(comparison)
+    _validate_sequence(samples)
+    _validate_sequence(thresholds)
     keys: list[Key] = []
     labels: list[str] = []
     values: list[float] = []
     for sample in samples:
+        _validate_sample(sample)
         keys.append(sample[0])
         labels.append(sample[1])
         values.append(_number(sample[2]))
@@ -159,6 +187,8 @@ def compare_thresholds(
 
 
 def _csv_rows(text: str) -> list[list[str]]:
+    if not isinstance(text, str):
+        raise ValueError("Expected decoded CSV text")
     reader = csv.reader(StringIO(text, newline=""), strict=True)
     try:
         return list(reader)
@@ -194,6 +224,7 @@ def _csv_config(
         raise ValueError("Select distinct key, label and value columns")
     if bounds is None:
         return -math.inf, math.inf
+    _validate_sequence(bounds)
     lower, upper = map(_number, bounds)
     if lower > upper:
         raise ValueError("Range minimum exceeds maximum")
@@ -239,7 +270,10 @@ def parse_label_csv(
         ValueError: CSV structure, selected columns, identities, labels, numbers
             or range are invalid. No rows are silently skipped or aggregated.
     """
+    _validate_sequence(key_columns)
     required = [*key_columns, label_column, value_column]
+    if not all(map(_valid_key_part, required)):
+        raise ValueError("Column names must be nonempty strings")
     lower, upper = _csv_config(key_columns, required, value_range)
     rows = _csv_rows(text)
     indices = _columns(rows[0] if rows else [], required)

@@ -24,10 +24,16 @@ def test_mixed_counts_rates_and_immutability() -> None:
     before = (keys.copy(), labels.copy(), removed.copy())
     expected = {"좋음": (1, 3, 1 / 3), "나쁨": (2, 3, 2 / 3), "애매": (1, 1, 1.0)}
     assert evaluate_removals(keys, labels, removed) == expected
-    assert bad_removal_rate(keys, labels, removed) == 2 / 3
-    assert good_removal_rate(keys, labels, removed) == 1 / 3
     assert evaluate_removals(keys, labels, removed) == expected
     assert (keys, labels, removed) == before
+
+
+def test_mixed_convenience_rates() -> None:
+    keys = [(str(i),) for i in range(7)]
+    labels = ["나쁨", "좋음", "애매", "나쁨", "좋음", "나쁨", "좋음"]
+    removed = [True, True, True, True, False, False, False]
+    assert bad_removal_rate(keys, labels, removed) == 2 / 3
+    assert good_removal_rate(keys, labels, removed) == 1 / 3
 
 
 @pytest.mark.parametrize("label", ["좋음", "나쁨", "애매"])
@@ -41,6 +47,9 @@ def test_empty_inputs() -> None:
     assert evaluate_removals([], [], []) == dict.fromkeys(["좋음", "애매", "나쁨"], (0, 0, None))
     assert bad_removal_rate([], [], []) is None
     assert good_removal_rate([], [], []) is None
+
+
+def test_empty_csv_and_thresholds() -> None:
     assert parse("id,label,value\n") == []
     assert compare_thresholds([], [1], comparison="<")[0][1]["나쁨"] == (0, 0, None)
     assert compare_thresholds([], [], comparison="<") == []
@@ -156,8 +165,10 @@ def test_candidates_order_counts_determinism_and_immutability() -> None:
         (1, 1, 1.0),
     ]
     assert [item[1]["좋음"][0] for item in result] == [1, 0, 0, 0]
-    assert compare_thresholds(samples, thresholds, comparison="<") == result
-    assert (samples, thresholds) == before
+    assert (compare_thresholds(samples, thresholds, comparison="<"), (samples, thresholds)) == (
+        result,
+        before,
+    )
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), True, "1"])
@@ -173,3 +184,57 @@ def test_comparison_validates_even_without_candidates() -> None:
         compare_thresholds([], [], comparison="==")
     with pytest.raises(ValueError, match="Duplicate"):
         compare_thresholds([(("a",), "좋음", 1), (("a",), "나쁨", 2)], [], comparison="<")
+
+
+@pytest.mark.parametrize(
+    "sample", [None, 1, "abc", (), (("a",),), (("a",), "좋음"), (("a",), "좋음", 1, "extra")]
+)
+def test_invalid_sample_shapes(sample: Any) -> None:
+    with pytest.raises(ValueError):
+        compare_thresholds([sample], [], comparison="<")
+
+
+@pytest.mark.parametrize("value", [None, 1, "abc", b"abc", {"a": 1}])
+def test_invalid_input_containers(value: Any) -> None:
+    for inputs in [(value, [], []), ([], value, []), ([], [], value)]:
+        with pytest.raises(ValueError):
+            evaluate_removals(*inputs)
+    with pytest.raises(ValueError):
+        compare_thresholds(value, [], comparison="<")
+    with pytest.raises(ValueError):
+        compare_thresholds([], value, comparison="<")
+
+
+@pytest.mark.parametrize("comparison", [None, [], {}, 1])
+def test_invalid_comparison_types(comparison: Any) -> None:
+    with pytest.raises(ValueError, match="Comparison"):
+        compare_thresholds([], [], comparison=comparison)
+
+
+@pytest.mark.parametrize("keys", [None, "id", [["id"]], [1], [" "]])
+def test_invalid_csv_column_types(keys: Any) -> None:
+    with pytest.raises(ValueError):
+        parse_label_csv(
+            "id,label,value\n", key_columns=keys, label_column="label", value_column="value"
+        )
+
+
+@pytest.mark.parametrize("value", [None, 1, b"id,label,value"])
+def test_invalid_csv_text_type(value: Any) -> None:
+    with pytest.raises(ValueError):
+        parse(value)
+
+
+@pytest.mark.parametrize("bounds", [1, "01", (), (0,), (0, 1, 2), (False, 1)])
+def test_invalid_csv_range_shapes(bounds: Any) -> None:
+    with pytest.raises(ValueError):
+        parse("id,label,value\n", value_range=bounds)
+
+
+def test_extreme_finite_values_and_integer_overflow() -> None:
+    samples = [(("a",), "나쁨", -1e308), (("b",), "좋음", 1e308)]
+    result = compare_thresholds(samples, [-1e308, 0, 1e308], comparison="<")
+    assert [entry[1]["나쁨"][0] for entry in result] == [0, 1, 1]
+    assert [entry[1]["좋음"][0] for entry in result] == [0, 0, 0]
+    with pytest.raises(ValueError, match="large"):
+        compare_thresholds([], [10**10000], comparison="<")
