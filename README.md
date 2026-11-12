@@ -49,4 +49,19 @@ Python 버전과 라이브러리 버전은 팀 전체가 같게 쓴다. `uv`가 
 
 PR을 올리면 CI(`.github/workflows/ci.yml`)가 위 다섯 가지를 실행한다. 모두 통과해야 머지한다. 의존성을 추가할 때는 `uv add <패키지>`로 넣어 `uv.lock`도 함께 커밋한다.
 
+### DB (PostgreSQL)
+
+[Docker](https://docs.docker.com/get-started/get-docker/)로 내 컴퓨터에 띄운다. 주소는 `config.py` 기본값과 같아서 `.env`에 따로 적지 않아도 된다.
+
+```
+docker compose up -d postgres     # 띄우기 (데이터는 볼륨 pgdata에 남는다)
+uv run alembic upgrade head       # 테이블을 최신 마이그레이션까지 맞추기
+docker compose down               # 끄기 (-v를 붙이면 데이터도 지운다)
+```
+
+- 5432 포트를 이미 다른 PostgreSQL이 쓰고 있으면 `docker-compose.yml`의 왼쪽 포트를 바꾸고, `.env`의 `CLOZE_DATABASE_URL` 주석을 풀어 같은 포트로 고친다.
+- DB가 꺼져 있으면 DB 테스트는 건너뛴다. CI는 PostgreSQL을 함께 띄우므로 건너뛰지 않고, 연결에 실패하면 테스트가 실패한다.
+- 테이블을 추가하거나 바꿀 때는 `uv run alembic revision --autogenerate -m "설명"`으로 파일을 만들고, 생성된 내용을 꼭 읽어 본다(이름 바꾸기를 지우고 새로 만들기로 잘못 읽는 경우가 있다). 마이그레이션은 **추가만** 한다(새 테이블·빈 값 허용 컬럼·인덱스).
+- 다른 사람과 동시에 마이그레이션을 만들면 기록이 두 갈래가 되어 CI의 `test_migrations_have_single_head`가 실패한다. 늦게 머지하는 쪽이 `develop`을 합친 뒤 `uv run alembic merge heads -m "merge"`로 합친다.
+
 수업 PDF 같은 기준 자료는 저작권 때문에 레포에 넣지 않는다. 로컬 폴더에 두고 `CLOZE_SAMPLES_DIR`로 가리킨다. 테스트용으로 직접 만든 작은 PDF만 `tests/fixtures/`에 커밋한다.

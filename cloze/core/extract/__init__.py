@@ -9,6 +9,7 @@ import pdfplumber
 from pdfplumber.page import Page
 from pdfplumber.utils.text import WordExtractor
 
+from cloze.core.filter import EDGE_PUNCTUATION
 from cloze.core.models import BBox, PageInfo, PageTokens, Token
 
 # 렌더링 크기·이미지 형식·좌표 계산·단어 나누기가 바뀌면 올린다(pdf-extraction.md 3절).
@@ -115,8 +116,38 @@ def _ordered_words(chars: list[dict[str, Any]]) -> list[tuple[int, Word]]:
 
 def _group_words(direction: int, chars: list[dict[str, Any]]) -> list[tuple[int, Word]]:
     """한 방향의 글자로 단어를 만들고, 그 방향의 읽기 좌표로 줄을 묶어 정렬한다."""
-    words = _word_extractor(direction).extract_words(chars)
+    words = [
+        {**word, "word_box": word_box(word_chars)}
+        for word, word_chars in _word_extractor(direction).iter_extract_tuples(chars)
+    ]
     return _in_reading_order([(_READING[direction](*_box(word)), word) for word in words])
+
+
+def word_box(chars: list[dict[str, Any]]) -> Frame | None:
+    """앞뒤 문장 부호를 뺀 글자들의 상자(pt, 화면 좌표). 뗄 부호가 없거나 부호뿐이면 None."""
+    inner = _strip_edge_chars(chars)
+    if not inner or len(inner) == len(chars):
+        return None
+    return (
+        min(float(c["x0"]) for c in inner),
+        min(float(c["top"]) for c in inner),
+        max(float(c["x1"]) for c in inner),
+        max(float(c["bottom"]) for c in inner),
+    )
+
+
+def _strip_edge_chars(chars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    start, end = 0, len(chars)
+    while start < end and _is_punctuation(chars[start]):
+        start += 1
+    while end > start and _is_punctuation(chars[end - 1]):
+        end -= 1
+    return chars[start:end]
+
+
+def _is_punctuation(char: dict[str, Any]) -> bool:
+    text = str(char["text"])
+    return bool(text) and all(ch in EDGE_PUNCTUATION for ch in text)
 
 
 def _char_direction(char: dict[str, Any]) -> int:
@@ -145,25 +176,27 @@ def _in_reading_order(placed: list[tuple[Frame, Word]]) -> list[tuple[int, Word]
 
 
 def _token(token_id: int, line_id: int, word: Word, frame: Frame) -> Token:
+    inner = word.get("word_box")
     return Token(
         id=token_id,
         text=str(word["text"]),
-        bbox=_normalized_bbox(word, frame),
+        bbox=_normalized_bbox(_box(word), frame),
+        word_bbox=None if inner is None else _normalized_bbox(inner, frame),
         line_id=line_id,
         font_size=float(word["size"]),
         fontname=str(word["fontname"]),
     )
 
 
-def _normalized_bbox(word: Word, frame: Frame) -> BBox:
+def _normalized_bbox(box: Frame, frame: Frame) -> BBox:
     """보이는 영역의 좌상단을 원점으로 0~1로 바꾼다."""
     left, top, right, bottom = frame
     width, height = right - left, bottom - top
     return (
-        _unit((float(word["x0"]) - left) / width),
-        _unit((float(word["top"]) - top) / height),
-        _unit((float(word["x1"]) - left) / width),
-        _unit((float(word["bottom"]) - top) / height),
+        _unit((box[0] - left) / width),
+        _unit((box[1] - top) / height),
+        _unit((box[2] - left) / width),
+        _unit((box[3] - top) / height),
     )
 
 
