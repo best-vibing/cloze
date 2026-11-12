@@ -52,7 +52,8 @@ body {
   padding: 0 0.15em;
   border: 0;
   border-bottom: 1px dashed rgb(0 0 0 / 0.25);
-  font-family: inherit;
+  /* API에 글꼴 정보가 없어 강의자료에 흔한 Arial 계열을 먼저 쓴다. 한글은 맑은 고딕으로 넘어간다. */
+  font-family: Arial, Helvetica, "Malgun Gothic", sans-serif;
   font-size: calc(var(--font-ratio) * 100cqw);
   line-height: 1;
   color: var(--font-color);
@@ -68,13 +69,41 @@ body {
 
 .debug .blank { outline: 1px solid rgb(255 0 0 / 0.6); }
 
+/* 채점 결과. 색만으로 구분하지 않도록 밑줄 모양도 다르게 한다(맞음 실선, 거의 맞음 점선, 틀림 이중선). */
+.blank[data-result="correct"] { border-bottom: 2px solid #16a34a; }
+.blank[data-result="near"] { border-bottom: 2px dotted #d97706; }
+.blank[data-result="wrong"] { border-bottom: 3px double #dc2626; }
+
+.actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+#check {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+#check:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .hint {
   position: sticky;
   bottom: 0;
-  margin: 0;
   min-height: 2em;
   padding: 6px 16px;
   background: #fff;
   border-top: 1px solid #e5e7eb;
   font-size: 0.9rem;
 }
+
+.hint p { margin: 0; }
+.hint p:empty { display: none; }

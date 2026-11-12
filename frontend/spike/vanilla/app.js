@@ -1,31 +1,126 @@
 // 프론트 스파이크(#57) — 순수 HTML/JS 후보.
-// 페이지 결과 JSON(데이터 계약 1.4)과 가린 이미지만으로 입력칸을 겹친다.
+// mask 명령 결과(page_NNN.json + .webp)나 페이지 결과 JSON(데이터 계약 1.4)만으로 입력칸을 겹친다.
 // 입력칸 규칙: docs/design/grading-and-overlay.md 3.2
 
-const FIXTURES = [{ json: "../fixtures/page-1.json", image: "../fixtures/page-1.png" }];
+const FIXTURES = [
+  // tests/fixtures/sample.pdf를 feat/redact의 mask 명령으로 만든 결과(영어 3쪽)
+  { json: "../fixtures/mask/page_001.json", image: "../fixtures/mask/page_001.webp" },
+  { json: "../fixtures/mask/page_002.json", image: "../fixtures/mask/page_002.webp" },
+  { json: "../fixtures/mask/page_003.json", image: "../fixtures/mask/page_003.webp" },
+  // make_fixture.py로 만든 계약 1.4 모양(한국어 1쪽, style·hint 포함)
+  { json: "../fixtures/page-1.json", image: "../fixtures/page-1.png" },
+];
 const MAX_GROW = 3; // 입력이 길어질 때 bbox 폭의 최대 몇 배까지 늘릴지
+const FONT_FROM_BBOX = 0.85; // [가설] style이 없을 때 글자 크기 = bbox 높이 × 0.85 (설계 3.1 스캔본 규칙)
+const DEFAULT_FONT_COLOR = "#1a1a1a"; // mask 결과에는 글자색이 없다
 
-/**
- * 페이지 결과(계약 1.4)를 `GET /blank-sets/{id}`의 페이지 모양으로 바꾼다.
- * 정답(answer, variants)은 버린다. 화면에는 정답이 없어야 한다(D2).
- * order는 읽는 순서(줄 → x좌표)다.
- */
-function toApiPage(result, imageUrl) {
+/** 계약 1.4 모양: style·hint가 있고, order는 읽는 순서(줄 → x좌표)로 매긴다. */
+function fromContract(result) {
   const lineOf = new Map(result.tokens.map((t) => [t.id, t.line_id]));
-  const blanks = result.blanks
-    .map((b, i) => ({
-      blank_id: `p${result.page.page_no}-b${i}`,
-      line: lineOf.get(b.token_ids[0]),
-      bbox: b.bbox,
-      type: b.type,
-      hint: b.hint,
-      style: b.style,
-    }))
+  return result.blanks
+    .map((b) => ({ ...b, line: lineOf.get(b.token_ids[0]) }))
     .sort((a, b) => a.line - b.line || a.bbox[0] - b.bbox[0])
     .map(({ line, ...b }, i) => ({ ...b, order: i + 1 }));
-  return { ...result.page, image_url: imageUrl, blanks };
 }
 
+/** mask 결과 모양: order·answer·bbox·bg_color만 있다. 글자 크기는 bbox 높이로 짐작한다. */
+function fromMask(result) {
+  const { width_pt: w, height_pt: h } = result.page;
+  return result.blanks.map((b) => ({
+    order: b.order,
+    answer: b.answer,
+    variants: [],
+    bbox: b.bbox,
+    type: "term",
+    hint: null,
+    style: {
+      font_size_ratio: (b.bbox[3] - b.bbox[1]) * FONT_FROM_BBOX * (h / w),
+      font_color: DEFAULT_FONT_COLOR,
+      bg_color: b.bg_color,
+    },
+  }));
+}
+
+/** 두 모양을 같은 모양(정답 포함)으로 읽는다. pageNo는 세트 안의 쪽 순서다. */
+function readFixture(result, pageNo) {
+  const blanks = (result.tokens ? fromContract(result) : fromMask(result))
+    .sort((a, b) => a.order - b.order)
+    .map((b) => ({ ...b, blank_id: `p${pageNo}-o${b.order}` }));
+  return { page: { ...result.page, page_no: pageNo }, blanks };
+}
+
+/**
+ * 읽은 쪽을 `GET /blank-sets/{id}`의 페이지 모양으로 바꾼다.
+ * 정답(answer, variants)은 버린다. 화면에는 정답이 없어야 한다(D2).
+ */
+function toApiPage({ page, blanks }, imageUrl) {
+  const shown = blanks.map(({ blank_id, order, bbox, type, hint, style }) => ({
+    blank_id, order, bbox, type, hint, style,
+  }));
+  return { ...page, image_url: imageUrl, blanks: shown };
+}
+
+// ---- 가짜 채점 서버 ------------------------------------------------------------
+// `POST /blank-sets/{id}/attempts`를 흉내 낸다. 정답은 이 안에만 있고 화면 쪽 데이터로 나가지 않는다.
+// 판정은 grading-and-overlay.md 1.1의 일부(정규화·조사·숫자·near)만 옮긴 시험용이다. 실제 채점은 #55 core/grade.
+
+const JOSA = ["에서", "으로", "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과", "도", "만"];
+
+function normalize(text) {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\p{P}\p{S}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function stripJosa(text) {
+  const josa = JOSA.find((j) => text.length > j.length && text.endsWith(j));
+  return josa ? text.slice(0, -josa.length) : text;
+}
+
+function editDistance(a, b) {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+function judge(input, blank) {
+  const given = normalize(input);
+  const accepted = [blank.answer, ...blank.variants].map(normalize);
+  if (accepted.includes(given) || accepted.includes(stripJosa(given))) return "correct";
+  if (blank.type === "number" && given !== "" && Number(given) === Number(accepted[0])) {
+    return "correct";
+  }
+  if (accepted[0].length >= 5 && editDistance(given, accepted[0]) <= 1) return "near";
+  return "wrong";
+}
+
+function createFakeServer(pages) {
+  const answers = new Map();
+  for (const p of pages) for (const b of p.blanks) answers.set(b.blank_id, b);
+  let attemptNo = 0;
+  return {
+    async submitAttempt(given) {
+      await new Promise((r) => setTimeout(r, 300)); // 실제 서버처럼 응답에 시간이 걸린다
+      const results = {};
+      for (const [id, blank] of answers) results[id] = judge(given[id] ?? "", blank);
+      const correct = Object.values(results).filter((v) => v === "correct").length;
+      attemptNo += 1;
+      return { attempt_id: `fake-${attemptNo}`, results, score: correct / answers.size };
+    },
+    get attemptCount() {
+      return attemptNo; // 스파이크 확인용: 제출이 몇 번 들어왔나
+    },
+  };
+}
 
 /** 입력한 글자 폭에 맞춰 입력칸을 늘린다. 단위는 cqw라 창 크기에 따라 같이 변한다. */
 function fitWidth(input, measure) {
@@ -33,8 +128,10 @@ function fitWidth(input, measure) {
   const minCqw = (x1 - x0) * 100;
   const maxCqw = Math.min(minCqw * MAX_GROW, (1 - x0) * 100);
   const pageWidth = input.parentElement.clientWidth;
-  measure.font = getComputedStyle(input).font;
-  const textCqw = ((measure.measureText(input.value).width + 8) / pageWidth) * 100;
+  const css = getComputedStyle(input);
+  measure.font = css.font;
+  const padding = parseFloat(css.paddingLeft) + parseFloat(css.paddingRight) + 2; // +2: 커서 자리
+  const textCqw = ((measure.measureText(input.value).width + padding) / pageWidth) * 100;
   input.style.width = `${Math.min(Math.max(minCqw, textCqw), maxCqw)}cqw`;
 }
 
@@ -76,20 +173,95 @@ function renderPage(page, measure) {
   return box;
 }
 
-/** Enter는 다음 빈칸, Shift+Enter는 이전 빈칸. 한글 조합 중에는 Enter·Tab 이동을 막는다. */
-function onKeydown(event) {
+// ---- 한글 조합(IME) 보호 ---------------------------------------------------------
+// 조합 중(compositionstart~compositionend)에 누른 Enter·Tab은 글자만 확정하고 이동하지 않는다.
+// 크롬 등은 조합을 끝낸 Enter를 확정 직후 "보통 Enter"로 한 번 더 보낸다. 그 키도 막는다.
+const IME_RELEASE_MS = 100; // keyup이 오지 않을 때(창 전환 등) 막기를 푸는 시간
+const ime = { composing: false, justEnded: false, timer: 0 };
+
+function trackComposition() {
+  document.addEventListener("compositionstart", () => {
+    ime.composing = true;
+  });
+  document.addEventListener("compositionend", () => {
+    ime.composing = false;
+    ime.justEnded = true; // 같은 키를 놓을 때(keyup)까지 이동을 막는다
+    clearTimeout(ime.timer);
+    ime.timer = setTimeout(() => (ime.justEnded = false), IME_RELEASE_MS);
+  });
+  document.addEventListener("keyup", () => {
+    ime.justEnded = false;
+  });
+}
+
+function blockedByIme(event) {
+  return event.isComposing || event.keyCode === 229 || ime.composing || ime.justEnded;
+}
+
+/**
+ * Enter는 다음 빈칸, Shift+Enter는 이전 빈칸. 마지막 빈칸에서 Enter를 누르면 정답을 확인한다.
+ * 한글 조합 중이거나 조합을 막 끝낸 Enter·Tab은 막는다.
+ */
+function onKeydown(event, submit) {
   const input = event.target;
   if (!input.classList?.contains("blank")) return;
-  const composing = event.isComposing || event.keyCode === 229;
-  if (composing && (event.key === "Enter" || event.key === "Tab")) {
+  if ((event.key === "Enter" || event.key === "Tab") && blockedByIme(event)) {
     event.preventDefault();
     return;
   }
   if (event.key !== "Enter") return;
   event.preventDefault();
   const all = [...document.querySelectorAll(".blank")];
-  const next = all[all.indexOf(input) + (event.shiftKey ? -1 : 1)];
-  next?.focus();
+  const index = all.indexOf(input);
+  if (!event.shiftKey && index === all.length - 1) {
+    submit();
+    return;
+  }
+  all[index + (event.shiftKey ? -1 : 1)]?.focus();
+}
+
+/**
+ * 입력값을 모아 채점을 요청하고, 칸마다 결과를 표시한다.
+ * 응답을 기다리는 동안에는 다시 제출하지 않는다(버튼 연타·Enter 연타로 시도가 두 번 생기지 않게).
+ */
+async function submitAnswers(server, statusEl, button) {
+  if (button.disabled) return;
+  // 마지막 채점 뒤 고친 칸이 없으면(모든 칸에 결과 표시가 남아 있으면) 같은 답으로 시도를 또 만들지 않는다.
+  // 요청 중 잠금만으로는 응답이 온 뒤 누른 Enter를 막지 못한다.
+  if ([...document.querySelectorAll(".blank")].every((i) => i.dataset.result)) {
+    statusEl.textContent = `${statusEl.dataset.summary} 바뀐 칸이 없어 다시 채점하지 않았어요.`;
+    return;
+  }
+  button.disabled = true;
+  try {
+    await gradeAndShow(server, statusEl);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function gradeAndShow(server, statusEl) {
+  const inputs = [...document.querySelectorAll(".blank")];
+  const answers = Object.fromEntries(inputs.map((i) => [i.blank.blank_id, i.value]));
+  const { results, score } = await server.submitAttempt(answers);
+  const count = { correct: 0, near: 0, wrong: 0 };
+  for (const input of inputs) {
+    const result = results[input.blank.blank_id];
+    count[result] += 1;
+    input.dataset.result = result;
+    input.setAttribute("aria-invalid", String(result !== "correct"));
+  }
+  const near = count.near ? `, 거의 맞음 ${count.near}칸` : "";
+  statusEl.dataset.summary = `${inputs.length}칸 중 ${count.correct}칸 정답(${Math.round(score * 100)}점)${near}.`;
+  statusEl.textContent = `${statusEl.dataset.summary} 고친 칸은 표시가 지워지고, 다시 확인할 수 있어요.`;
+}
+
+/** 결과를 받은 칸을 고치면 그 칸의 표시를 지운다. */
+function clearResult(event) {
+  const input = event.target;
+  if (!input.dataset?.result) return;
+  delete input.dataset.result;
+  input.removeAttribute("aria-invalid");
 }
 
 function showHint(event, hintEl) {
@@ -102,12 +274,22 @@ function showHint(event, hintEl) {
 async function main() {
   const pagesEl = document.getElementById("pages");
   const hintEl = document.getElementById("hint");
+  const resultEl = document.getElementById("result");
   const measure = document.createElement("canvas").getContext("2d");
-  for (const f of FIXTURES) {
-    const result = await (await fetch(f.json)).json();
-    pagesEl.append(renderPage(toApiPage(result, f.image), measure));
+  const pages = [];
+  for (const [i, f] of FIXTURES.entries()) {
+    const page = readFixture(await (await fetch(f.json)).json(), i + 1);
+    pages.push(page);
+    pagesEl.append(renderPage(toApiPage(page, f.image), measure));
   }
-  document.addEventListener("keydown", onKeydown);
+  const server = createFakeServer(pages);
+  const checkButton = document.getElementById("check");
+  const submit = () => submitAnswers(server, resultEl, checkButton);
+  checkButton.addEventListener("click", submit);
+  trackComposition();
+  window.spikeServer = server; // 스파이크 확인용(개발자 도구에서 제출 횟수 보기)
+  document.addEventListener("keydown", (e) => onKeydown(e, submit));
+  document.addEventListener("input", clearResult);
   document.addEventListener("focusin", (e) => showHint(e, hintEl));
   document.getElementById("debug").addEventListener("change", (e) => {
     document.body.classList.toggle("debug", e.target.checked);
