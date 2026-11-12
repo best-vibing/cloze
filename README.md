@@ -64,4 +64,15 @@ docker compose down               # 끄기 (-v를 붙이면 데이터도 지운�
 - 테이블을 추가하거나 바꿀 때는 `uv run alembic revision --autogenerate -m "설명"`으로 파일을 만들고, 생성된 내용을 꼭 읽어 본다(이름 바꾸기를 지우고 새로 만들기로 잘못 읽는 경우가 있다). 마이그레이션은 **추가만** 한다(새 테이블·빈 값 허용 컬럼·인덱스).
 - 다른 사람과 동시에 마이그레이션을 만들면 기록이 두 갈래가 되어 CI의 `test_migrations_have_single_head`가 실패한다. 늦게 머지하는 쪽이 `develop`을 합친 뒤 `uv run alembic merge heads -m "merge"`로 합친다.
 
+### 큐 (Redis·워커)
+
+```
+docker compose up -d redis              # 띄우기 (AOF가 켜져 있어 재시작해도 쌓인 작업이 남는다)
+uv run taskiq worker cloze.worker:broker  # 워커
+```
+
+- 작업 제한 시간(`CLOZE_TASK_TIMEOUT_S`)은 `CLOZE_QUEUE_IDLE_TIMEOUT_MS`보다 짧아야 한다. 어기면 설정을 읽을 때 실패한다([신뢰성 설계 2절](docs/design/reliability.md#2-시간-설정-초기값)).
+- 처리 중에 죽은 워커의 작업은 `idle_timeout`이 지난 **뒤 새 작업이 하나 들어올 때** 다른 워커가 넘겨받는다. 새 작업이 없으면 넘겨받지 않는다(PR의 재배달 실험).
+- 재배달 실험: idle을 줄여 워커를 띄우고(`CLOZE_TASK_TIMEOUT_S=30 CLOZE_QUEUE_IDLE_TIMEOUT_MS=60000 uv run taskiq worker cloze.worker:broker scripts.redelivery_experiment`), `uv run python -m scripts.redelivery_experiment B`로 등록한 뒤 "받음" 로그가 나오면 워커를 강제 종료한다.
+
 수업 PDF 같은 기준 자료는 저작권 때문에 레포에 넣지 않는다. 로컬 폴더에 두고 `CLOZE_SAMPLES_DIR`로 가리킨다. 테스트용으로 직접 만든 작은 PDF만 `tests/fixtures/`에 커밋한다.

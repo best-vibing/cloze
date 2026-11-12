@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +16,19 @@ class Settings(BaseSettings):
     samples_dir: Path | None = None
     # 기본값은 로컬 개발용(docker-compose.yml의 postgres). 운영 주소는 .env로 넣는다.
     database_url: SecretStr = SecretStr("postgresql+psycopg://cloze:cloze@localhost:5432/cloze")
+    redis_url: str = "redis://localhost:6379/0"
+    # 신뢰성 설계 2절. 작업 제한 시간이 idle_timeout 이상이면 살아서 처리 중인 작업이
+    # 다른 워커로 넘어가 두 번 실행된다.
+    task_timeout_s: int = 480
+    queue_idle_timeout_ms: int = 900_000
+
+    @model_validator(mode="after")
+    def _timeout_below_idle(self) -> "Settings":
+        if self.task_timeout_s * 1000 >= self.queue_idle_timeout_ms:
+            raise ValueError(
+                "task_timeout_s는 queue_idle_timeout_ms보다 짧아야 한다(신뢰성 설계 2절)"
+            )
+        return self
 
 
 def load_settings() -> Settings:

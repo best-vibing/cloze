@@ -15,5 +15,19 @@ services:
       interval: 2s
       retries: 15
 
+  redis:
+    image: redis:7
+    # AOF: Redis가 재시작돼도 쌓인 작업을 잃지 않는다(ADR-001).
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 15
+
 volumes:
   pgdata:
+  redisdata:
