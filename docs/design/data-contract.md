@@ -60,7 +60,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "page": {"page_no": 3, "width_pt": 720, "height_pt": 540, "source": "textlayer"},
   "tokens": [
     {"id": 12, "text": "Mitochondria,", "bbox": [0.12, 0.31, 0.30, 0.35], "word_bbox": [0.12, 0.31, 0.29, 0.35],
@@ -78,11 +78,11 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 
 | 필드 | 뜻 |
 |---|---|
-| `schema_version` | 계약 버전. 필드를 바꿀 때 올린다 |
+| `schema_version` | 계약 버전. 필드를 바꿀 때 올린다. 2: `tokens[].word_bbox` 추가 |
 | `page.source` | `textlayer` 또는 `ocr` |
 | `tokens[].id` | 페이지 안에서만 고유한 정수. LLM에는 이 id로 보내고 이 id로 받는다 |
 | `bbox` | `[x0, y0, x1, y1]`, 페이지 기준 0~1, 좌상단 원점 |
-| `tokens[].word_bbox` | 앞뒤 문장 부호를 뺀 글자들의 bbox. 뗄 부호가 없으면 `null`(= `bbox`). 정답과 칠하는 범위는 이것을 쓴다 |
+| `tokens[].word_bbox` | 앞뒤 문장 부호를 뺀 글자들의 bbox. 뗄 부호가 없으면 `null`(= `bbox`). 정답과 칠하는 범위는 이것을 쓴다. 이 필드가 없는 옛 토큰(`extract_version` 1)은 추출 버전이 달라 L2에서 재사용되지 않는다 |
 | `line_id`, `block_id` | 같은 줄·같은 문단 판정용. 품질 게이트의 "주변 문맥"과 구 연속성 검사에 쓴다 |
 | `fontname` | 폰트 이름. 규칙 기반 선택기가 굵은 글씨를 판정할 때 쓴다 |
 | `conf` | 인식 신뢰도. 텍스트 레이어는 1.0 |

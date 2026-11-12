@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 # [가설] concept 프리셋의 단어 100개당 빈칸 수. 문서에 값이 없어 임시로 정했다.
 DEFAULT_DENSITY = 5.0
 

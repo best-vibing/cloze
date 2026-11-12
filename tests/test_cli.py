@@ -33,7 +33,7 @@ def test_writes_one_json_per_page(tmp_path: Path) -> None:
 def test_json_holds_tokens_candidates_reasons_and_selection(tmp_path: Path) -> None:
     _run(tmp_path, "--density", "10")
     page = _load(tmp_path, 1)
-    assert page["schema_version"] == 1
+    assert page["schema_version"] == 2
     assert page["page"]["page_no"] == 1
     assert page["tokens"][0]["text"] == "Cloze"
     excluded = {item["id"]: item["reason"] for item in page["excluded"]}
@@ -88,7 +88,7 @@ def test_mask_writes_webp_and_json_per_page(tmp_path: Path) -> None:
 def test_mask_json_lists_blanks_in_order(tmp_path: Path) -> None:
     _mask(tmp_path)
     page = _load(tmp_path, 1)
-    assert page["extract_version"] == 1
+    assert page["extract_version"] == 2
     assert page["page"]["page_no"] == 1
     blanks = page["blanks"]
     assert [blank["order"] for blank in blanks] == list(range(1, len(blanks) + 1))
