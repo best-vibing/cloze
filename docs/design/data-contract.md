@@ -87,7 +87,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `fontname` | 폰트 이름. 규칙 기반 선택기가 굵은 글씨를 판정할 때 쓴다 |
 | `conf` | 인식 신뢰도. 텍스트 레이어는 1.0 |
 | `blanks[].answer` | 토큰 원문에서 앞뒤 문장 부호를 뗀 글자. 한국어 조사는 떼지 않는다(v1은 어절 단위, [채점 1.1](grading-and-overlay.md#11-판정-순서)) |
-| `blanks[].bbox` | 묶인 토큰 `word_bbox`(없으면 `bbox`)의 합집합 + 패딩. 문장 부호는 칠하지 않는다 |
+| `blanks[].bbox` | 묶인 토큰 `word_bbox`(없으면 `bbox`)의 합집합 + 패딩. 문장 부호는 칠하지 않는다. 부호를 뗀 변에는 패딩을 붙이지 않는다(패딩이 글자와 부호 사이 여백보다 커서 부호를 덮기 때문) |
 | `blanks[].type` | `text`, `number`, `term` |
 | `blanks[].style` | 입력칸 표시 정보(글자 크기 비율·글자색·배경색). [채점·입력칸 표시](grading-and-overlay.md) 3.1 |
 | `selection.source` | `gemini`, `fallback`(규칙 기반), `none`(게이트 미달로 빈칸 없음) |

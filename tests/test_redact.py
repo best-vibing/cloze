@@ -58,6 +58,27 @@ def test_blank_bbox_prefers_word_bbox_over_token_bbox() -> None:
     assert blank_bbox(page, [0], pad_ratio=0.0) == (0.1, 0.5, 0.28, 0.6)
 
 
+def test_span_pads_only_edges_without_punctuation() -> None:
+    # "(learning rate"처럼 묶인 칸은 합집합의 바깥 변으로 본다. 앞의 "("가 있는 왼쪽만 패딩이 없다.
+    first = Token(
+        id=0,
+        text="(learning",
+        bbox=(0.1, 0.5, 0.3, 0.6),
+        word_bbox=(0.11, 0.5, 0.3, 0.6),
+        line_id=0,
+        font_size=12,
+        fontname="R",
+    )
+    second = Token(
+        id=1, text="rate", bbox=(0.32, 0.5, 0.4, 0.6), line_id=0, font_size=12, fontname="R"
+    )
+    page = PageTokens(page=PageInfo(page_no=1, width_pt=600, height_pt=800), tokens=[first, second])
+    pad_x, pad_y = 12 * 0.1 / 600, 12 * 0.1 / 800
+    assert blank_bbox(page, [0, 1], pad_ratio=0.1) == pytest.approx(
+        (0.11, 0.5 - pad_y, 0.4 + pad_x, 0.6 + pad_y)
+    )
+
+
 def test_vertical_word_gets_same_padding_as_horizontal() -> None:
     # 회전 페이지의 세로 단어도 bbox 길이와 상관없이 글자 크기 기준으로 같은 두께가 붙는다.
     page = _page([(0.1, 0.1, 0.4, 0.12), (0.5, 0.1, 0.52, 0.4)])
@@ -173,3 +194,94 @@ def test_webp_keeps_fill_color_within_tolerance() -> None:
         median = ImageStat.Stat(decoded.crop(pixel_box(box, decoded.size))).median
         diffs = [abs(got - want) for got, want in zip(median, _rgb(color), strict=True)]
         assert max(diffs) <= WEBP_COLOR_TOLERANCE, (color, median)
+
+
+# 글자 진행 방향(도, 시계 방향)별 텍스트 행렬. make_fixtures.py의 _SIDEWAYS·_FLIPPED와 같다.
+_MATRIX = {0: "1 0 0 1", 90: "0 -1 1 0", 180: "-1 0 0 -1", 270: "0 1 -1 0"}
+# 부호 잉크를 셀 때 부호 띠를 글자 진행의 수직 방향으로 넓히는 폭(px). 괄호가 줄 위아래로 나온다.
+_STRIP_MARGIN_PX = 6
+
+
+def _one_word_pdf(text: str, angle: int) -> bytes:
+    """Helvetica 12pt로 단어 하나를 페이지 가운데에 angle 방향으로 그린 한 쪽 PDF."""
+    shown = text.replace("(", r"\(").replace(")", r"\)")
+    stream = f"BT /R 12 Tf {_MATRIX[angle]} 306 396 Tm ({shown}) Tj ET".encode("ascii")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+        b"/Resources << /Font << /R 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer << /Size %d /Root 1 0 R >>\n" % (len(objects) + 1)
+    out += b"startxref\n%d\n%%%%EOF\n" % xref
+    return bytes(out)
+
+
+def _punctuation_strips(token: Token, size: tuple[int, int]) -> list[tuple[int, int, int, int]]:
+    """토큰 bbox 중 word_bbox 바깥(부호가 있는 띠)의 픽셀 영역들."""
+    assert token.word_bbox is not None
+    x0, y0, x1, y1 = pixel_box(token.bbox, size)
+    wx0, wy0, wx1, wy1 = pixel_box(token.word_bbox, size)
+    m = _STRIP_MARGIN_PX
+    strips = []
+    if wx0 > x0:
+        strips.append((x0, y0 - m, wx0, y1 + m))
+    if wx1 < x1:
+        strips.append((wx1, y0 - m, x1, y1 + m))
+    if wy0 > y0:
+        strips.append((x0 - m, y0, x1 + m, wy0))
+    if wy1 < y1:
+        strips.append((x0 - m, wy1, x1 + m, y1))
+    return strips
+
+
+def _redact_one_word(text: str, angle: int) -> tuple[Token, Image.Image, Image.Image]:
+    pdf = _one_word_pdf(text, angle)
+    page = extract_tokens(pdf)[0]
+    assert [token.text for token in page.tokens] == [text]
+    image = render_page(pdf, 1)
+    result = redact(image, [blank_bbox(page, [0])])  # 기본 PAD_RATIO
+    return page.tokens[0], image, result.image
+
+
+@pytest.mark.parametrize("text", ["Variance:", "end.", "(word)", "sample):"])
+def test_default_padding_keeps_punctuation_and_hides_word(text: str) -> None:
+    # 12pt의 패딩(1.8pt)이 글자와 부호 사이 여백(약 1pt)보다 커서, 전에는 부호 잉크가 줄었다.
+    token, before, after = _redact_one_word(text, 0)
+    strips = _punctuation_strips(token, before.size)
+    punctuation = sum(_dark_count(before.crop(strip)) for strip in strips)
+    assert punctuation > 0
+    assert sum(_dark_count(after.crop(strip)) for strip in strips) == punctuation
+    assert token.word_bbox is not None
+    assert _dark_count(after.crop(pixel_box(token.word_bbox, after.size))) == 0
+
+
+@pytest.mark.parametrize("angle", [0, 90, 180, 270])
+def test_rotated_word_bbox_and_redaction(angle: int) -> None:
+    # "(word):"는 읽는 방향의 앞에 "(", 뒤에 "):"가 붙는다. 회전해도 그 축에서만 줄어야 한다.
+    token, before, after = _redact_one_word("(word):", angle)
+    assert token.word_bbox is not None
+    box, word = token.bbox, token.word_bbox
+    along = (0, 2) if angle in (0, 180) else (1, 3)  # 글자 진행 축의 (시작, 끝) 인덱스
+    across = (1, 3) if angle in (0, 180) else (0, 2)
+    assert all(word[i] == pytest.approx(box[i]) for i in across)
+    assert word[along[0]] > box[along[0]] and word[along[1]] < box[along[1]]
+    # 앞 부호 "("는 끝 부호 "):"보다 좁다. 화면에서 앞이 어느 쪽인지는 방향에 따라 바뀐다.
+    first, last = (0, 1) if angle in (0, 90) else (1, 0)
+    gaps = (word[along[0]] - box[along[0]], box[along[1]] - word[along[1]])
+    assert gaps[first] < gaps[last]
+    strips = _punctuation_strips(token, before.size)
+    punctuation = sum(_dark_count(before.crop(strip)) for strip in strips)
+    assert punctuation > 0
+    assert sum(_dark_count(after.crop(strip)) for strip in strips) == punctuation
+    assert _dark_count(after.crop(pixel_box(word, after.size))) == 0
