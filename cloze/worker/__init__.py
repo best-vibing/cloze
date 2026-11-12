@@ -1,4 +1,4 @@
-"""Taskiq 브로커와 작업. 실행: uv run taskiq worker cloze.worker:broker"""
+"""Taskiq 브로커와 작업. 실행: uv run taskiq worker cloze.worker:broker --max-async-tasks 1"""
 
 import logging
 

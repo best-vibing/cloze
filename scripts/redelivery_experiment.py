@@ -1,6 +1,6 @@
 """재배달 실험. README "큐 (Redis·워커)" 절의 절차를 따른다.
 
-워커:  uv run taskiq worker cloze.worker:broker scripts.redelivery_experiment
+워커:  uv run taskiq worker cloze.worker:broker scripts.redelivery_experiment --max-async-tasks 1
 등록:  uv run python -m scripts.redelivery_experiment <작업 이름>
 """
 

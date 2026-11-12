@@ -14,9 +14,11 @@ class Settings(BaseSettings):
     gemini_timeout_s: float = 60.0
     # 기준 PDF 세트 위치. 저작권 때문에 레포에 두지 않고, 없으면 해당 테스트를 건너뛴다.
     samples_dir: Path | None = None
-    # 기본값은 로컬 개발용(docker-compose.yml의 postgres). 운영 주소는 .env로 넣는다.
-    database_url: SecretStr = SecretStr("postgresql+psycopg://cloze:cloze@localhost:5432/cloze")
-    redis_url: str = "redis://localhost:6379/0"
+    # 기본값은 로컬 개발용(docker-compose.yml의 postgres·redis). 운영 주소는 .env로 넣는다.
+    # localhost가 아니라 127.0.0.1이다. compose가 127.0.0.1에만 포트를 열어서, localhost가
+    # ::1로 먼저 풀리면 접속하지 못한다(제한 시간이 없는 연결은 그대로 멈춘다).
+    database_url: SecretStr = SecretStr("postgresql+psycopg://cloze:cloze@127.0.0.1:5432/cloze")
+    redis_url: str = "redis://127.0.0.1:6379/0"
     # 신뢰성 설계 2절. 작업 제한 시간이 idle_timeout 이상이면 살아서 처리 중인 작업이
     # 다른 워커로 넘어가 두 번 실행된다.
     task_timeout_s: int = 480

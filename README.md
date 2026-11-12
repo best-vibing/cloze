@@ -68,11 +68,13 @@ docker compose down               # 끄기 (-v를 붙이면 데이터도 지운�
 
 ```
 docker compose up -d redis              # 띄우기 (AOF가 켜져 있어 재시작해도 쌓인 작업이 남는다)
-uv run taskiq worker cloze.worker:broker  # 워커
+uv run taskiq worker cloze.worker:broker --max-async-tasks 1  # 워커
 ```
+
+- `--max-async-tasks 1`: 워커 프로세스 하나가 작업을 하나씩만 처리한다([신뢰성 설계 5절](docs/design/reliability.md#5-한도)). taskiq 기본값은 100이라, 빠뜨리면 한 프로세스가 PDF 여러 개를 동시에 메모리에 올리고 Gemini 동시 호출 상한도 나눠 쓴다.
 
 - 작업 제한 시간(`CLOZE_TASK_TIMEOUT_S`)은 `CLOZE_QUEUE_IDLE_TIMEOUT_MS`보다 짧아야 한다. 어기면 설정을 읽을 때 실패한다([신뢰성 설계 2절](docs/design/reliability.md#2-시간-설정-초기값)).
 - 처리 중에 죽은 워커의 작업은 `idle_timeout`이 지난 **뒤 새 작업이 하나 들어올 때** 다른 워커가 넘겨받는다. 새 작업이 없으면 넘겨받지 않는다(PR의 재배달 실험).
-- 재배달 실험: idle을 줄여 워커를 띄우고(`CLOZE_TASK_TIMEOUT_S=30 CLOZE_QUEUE_IDLE_TIMEOUT_MS=60000 uv run taskiq worker cloze.worker:broker scripts.redelivery_experiment`), `uv run python -m scripts.redelivery_experiment B`로 등록한 뒤 "받음" 로그가 나오면 워커를 강제 종료한다.
+- 재배달 실험: idle을 줄여 워커를 띄우고(`CLOZE_TASK_TIMEOUT_S=30 CLOZE_QUEUE_IDLE_TIMEOUT_MS=60000 uv run taskiq worker cloze.worker:broker scripts.redelivery_experiment --max-async-tasks 1`), `uv run python -m scripts.redelivery_experiment B`로 등록한 뒤 "받음" 로그가 나오면 워커를 강제 종료한다.
 
 수업 PDF 같은 기준 자료는 저작권 때문에 레포에 넣지 않는다. 로컬 폴더에 두고 `CLOZE_SAMPLES_DIR`로 가리킨다. 테스트용으로 직접 만든 작은 PDF만 `tests/fixtures/`에 커밋한다.

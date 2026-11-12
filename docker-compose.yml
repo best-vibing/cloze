@@ -6,8 +6,9 @@ services:
       POSTGRES_USER: cloze
       POSTGRES_PASSWORD: cloze # 로컬 전용 값. 운영 비밀번호는 시연 기기 .env에만 둔다.
       POSTGRES_DB: cloze
+    # 127.0.0.1에만 연다. 그냥 "5432:5432"면 같은 와이파이의 다른 기기도 위 계정으로 접속한다.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -19,8 +20,9 @@ services:
     image: redis:7
     # AOF: Redis가 재시작돼도 쌓인 작업을 잃지 않는다(ADR-001).
     command: ["redis-server", "--appendonly", "yes"]
+    # 127.0.0.1에만 연다. Redis는 비밀번호가 없어 열려 있으면 누구나 작업을 넣고 지울 수 있다.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:

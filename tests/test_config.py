@@ -25,7 +25,7 @@ def test_defaults_without_env() -> None:
     settings = Settings()
     assert settings.gemini_api_key is None
     assert settings.samples_dir is None
-    assert "@localhost:5432/" in settings.database_url.get_secret_value()
+    assert "@127.0.0.1:5432/" in settings.database_url.get_secret_value()
 
 
 def test_database_url_hidden_when_printed() -> None:
