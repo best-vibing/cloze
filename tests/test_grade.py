@@ -2,7 +2,7 @@
 
 import pytest
 
-from cloze.core.grade import AnswerKey, Verdict, edit_distance, grade, judge, normalize, strip_josa
+from cloze.core.grade import AnswerKey, Verdict, edit_distance, grade, judge, normalize
 
 # (입력, 정답 정보, 기대 판정, 무엇을 확인하나)
 JUDGE_CASES: list[tuple[str, AnswerKey, Verdict, str]] = [
@@ -15,6 +15,8 @@ JUDGE_CASES: list[tuple[str, AnswerKey, Verdict, str]] = [
     # 한국어 조사
     ("미토콘드리아는", AnswerKey("미토콘드리아"), "correct", "입력 끝 조사"),
     ("세포막", AnswerKey("세포막은"), "correct", "정답 어절 끝 조사"),
+    ("세포막으로부터", AnswerKey("세포막"), "correct", "긴 조사(normalize_ko 목록)"),
+    ("사이", AnswerKey("사"), "wrong", "조사를 떼고 1자만 남으면 떼지 않음"),
     ("1665년", AnswerKey("1665", type="number"), "wrong", "'년'은 조사 목록에 없음"),
     # 2단계: 변형 목록
     ("ER", AnswerKey("endoplasmic reticulum", variants=("ER",)), "correct", "약어 변형"),
@@ -51,11 +53,6 @@ def test_judge(given: str, key: AnswerKey, expected: Verdict) -> None:
 def test_normalize_keeps_punctuation_between_digits() -> None:
     assert normalize("3.14") == "3.14"
     assert normalize("v1.2!") == "v1.2"
-
-
-def test_strip_josa_keeps_short_stem() -> None:
-    assert strip_josa("사이") == "사이"
-    assert strip_josa("세포에서") == "세포"
 
 
 def test_edit_distance() -> None:

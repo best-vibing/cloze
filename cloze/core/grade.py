@@ -11,13 +11,11 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
+from cloze.core.filter import normalize_ko
+
 type Verdict = Literal["correct", "near", "wrong"]
 type BlankType = Literal["text", "number", "term"]
 
-# 정답 어절 끝에서 뗄 수 있는 조사. 설계 1.1의 [가설] 목록이며, 긴 것을 먼저 뗀다.
-# cloze.core.filter.normalize_ko(PR #18)도 조사를 떼지만 아직 develop에 없고 목록이 더 넓다.
-JOSA = tuple("에서 으로 은 는 이 가 을 를 의 에 로 와 과 도 만".split())
-MIN_STEM = 2  # 조사를 뗀 뒤 2자 이상 남을 때만 뗀다("사이" → "사"가 되지 않게).
 NEAR_MIN_LEN = 5  # [가설] 정답이 이 길이 이상일 때만 near를 준다.
 NEAR_MAX_DISTANCE = 1  # [가설] near로 볼 최대 편집 거리.
 
@@ -78,22 +76,6 @@ def _is_dropped_punct(text: str, i: int) -> bool:
     return not between_digits
 
 
-def strip_josa(word: str) -> str:
-    """어절 끝의 흔한 조사 하나를 뗀다. 떼고 남는 글자가 ``MIN_STEM`` 보다 짧으면 그대로 둔다.
-
-    Examples:
-        >>> strip_josa("미토콘드리아는")
-        '미토콘드리아'
-        >>> strip_josa("사이")
-        '사이'
-    """
-    for josa in JOSA:
-        stem = word.removesuffix(josa)
-        if stem != word and len(stem) >= MIN_STEM:
-            return stem
-    return word
-
-
 def edit_distance(a: str, b: str) -> int:
     """한 글자 넣기·빼기·바꾸기를 몇 번 해야 a가 b가 되는지 센다(레벤슈타인 거리).
 
@@ -111,9 +93,9 @@ def edit_distance(a: str, b: str) -> int:
 
 
 def _same_text(given: str, expected: str) -> bool:
-    """정규화한 뒤 같거나, 어느 한쪽 끝의 조사를 떼면 같은가."""
+    """정규화한 뒤 같거나, 양쪽 끝의 조사를 떼면 같은가(조사 목록은 filter와 공유)."""
     g, e = normalize(given), normalize(expected)
-    return g != "" and (g == e or strip_josa(g) == strip_josa(e))
+    return g != "" and (g == e or normalize_ko(g) == normalize_ko(e))
 
 
 def _parse_number(text: str) -> Decimal | None:
