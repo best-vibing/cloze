@@ -78,7 +78,7 @@ flowchart TB
     R[(Redis Stream<br/>ack·재배달, AOF)]
     OS[(파일 저장소<br/>로컬 디스크 기본 · S3 호환)]
     PG[(PostgreSQL<br/>정답·좌표·상태·오답)]
-    GM[Gemini API<br/>유료 티어]
+    GM[Gemini API<br/>무료 티어]
     SC[스케줄러<br/>정리 작업 쪽지만 등록]
 
     subgraph W[Taskiq 워커 · 처리 파이프라인]
@@ -370,7 +370,7 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 | 클라우드 배포(VPS 이전) | 시연까지는 시연 기기로 충분 | 평가 기준이 클라우드 배포를 요구할 때 | 같은 Compose, 공개 주소는 Funnel 또는 Caddy(ADR-007) |
 | DB 백업·복구 절차 | 시연 기기 데이터는 발표 후 지움 | 클라우드로 옮길 때 | Alembic 마이그레이션은 결정됨(7장 `migrate`, DB가 처음 생기는 PR부터 적용) |
 | 프론트 구조(프레임워크, 화면 목록) | 프론트 스파이크 결과가 필요 | 로드맵 3단계(오버레이) 착수 시 | API 계약, 입력칸 규칙([채점·입력칸 표시](design/grading-and-overlay.md)) |
-| CI(자동 검사) | 검사할 코드가 아직 없음 | **레포 골격과 같은 시기(1주차)**. 처음부터 모든 PR이 정적 분석을 통과하게 | 다섯 가지 검사([README 개발 환경](../README.md#개발-환경)). DB를 쓰는 테스트는 CI의 PostgreSQL 서비스 컨테이너에서 돌린다. 표시를 달아 건너뛰면 워커의 멱등 저장 테스트가 CI에서 한 번도 돌지 않기 때문이다. `ci.yml` 반영은 DB 세팅([#29](https://github.com/best-vibing/cloze/issues/29))에서 |
+| CI(자동 검사) | 검사할 코드가 아직 없음 | **레포 골격과 같은 시기(1주차)**. 처음부터 모든 PR이 정적 분석을 통과하게 | 다섯 가지 검사([README 개발 환경](../README.md#개발-환경)). DB를 쓰는 테스트는 CI의 PostgreSQL 서비스 컨테이너에서 돌린다. 표시를 달아 건너뛰면 워커의 멱등 저장 테스트가 CI에서 한 번도 돌지 않기 때문이다. `ci.yml`에는 DB 세팅([#81](https://github.com/best-vibing/cloze/pull/81))에서 반영했다 |
 
 ## 10. 다음 행동
 
