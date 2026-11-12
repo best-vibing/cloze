@@ -62,10 +62,21 @@ def _page_tokens(page_no: int, page: Page) -> PageTokens:
 def _word_extractor(direction: int) -> WordExtractor:
     """0·180도 글자는 pdfplumber가 upright로, 90·270도 글자는 rotated로 다룬다."""
     char_dir, line_dir = _WORD_DIRECTIONS[direction]
-    options: dict[str, Any] = {"extra_attrs": EXTRA_ATTRS, "x_tolerance_ratio": X_TOLERANCE_RATIO}
     if direction in (90, 270):
-        return WordExtractor(char_dir_rotated=char_dir, line_dir_rotated=line_dir, **options)
-    return WordExtractor(char_dir=char_dir, line_dir=line_dir, **options)
+        # 세로 글은 pdfplumber가 x·y 허용치를 바꿔 쓴다: 글자 사이 간격은 y 허용치로,
+        # 줄 판정은 x 허용치로 본다. 그래서 비율은 y 쪽에 주고 줄 판정은 기본값(3pt)으로 둔다.
+        return WordExtractor(
+            extra_attrs=EXTRA_ATTRS,
+            y_tolerance_ratio=X_TOLERANCE_RATIO,
+            char_dir_rotated=char_dir,
+            line_dir_rotated=line_dir,
+        )
+    return WordExtractor(
+        extra_attrs=EXTRA_ATTRS,
+        x_tolerance_ratio=X_TOLERANCE_RATIO,
+        char_dir=char_dir,
+        line_dir=line_dir,
+    )
 
 
 def _visible_frame(page: Page) -> Frame:

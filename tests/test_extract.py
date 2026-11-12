@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from cloze.core.extract import EXTRACT_VERSION, extract_tokens
+from cloze.core.extract import extract_tokens
 from cloze.core.models import PageTokens
 
 SAMPLE = Path(__file__).parent / "fixtures" / "sample.pdf"
@@ -83,5 +83,11 @@ def test_korean_words_split_at_gap_without_space_char() -> None:
     assert lines[3] == ["gradient", "descent", "uses", "the", "learning", "rate"]
 
 
-def test_extract_version_is_bumped_for_word_splitting() -> None:
-    assert EXTRACT_VERSION == 2
+@pytest.mark.parametrize(
+    "page_no", [2, 3, 4, 5], ids=["page-rotate-90", "char-90", "char-270", "char-180"]
+)
+def test_korean_words_split_in_every_direction(page_no: int) -> None:
+    # 같은 0.29em 간격 줄을 페이지 회전·글자 회전으로 돌려도 어절이 나뉘어야 한다.
+    # 세로 글(90·270도)은 pdfplumber가 y 허용치로 글자 사이 간격을 판정한다.
+    page = extract_tokens(KOREAN.read_bytes())[page_no - 1]
+    assert [token.text for token in page.tokens] == ["인공지능은", "데이터를", "학습한다"]

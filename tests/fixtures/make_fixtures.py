@@ -1,4 +1,4 @@
-"""tests/fixtures/의 sample.pdf와 render.pdf를 표준 라이브러리만으로 만든다.
+"""tests/fixtures/의 sample.pdf·render.pdf·korean.pdf를 표준 라이브러리만으로 만든다.
 
 실행: uv run python tests/fixtures/make_fixtures.py
 """
@@ -125,13 +125,38 @@ def _spaced(size: int, y: int, words: list[str]) -> list[Run]:
     return runs
 
 
+KOREAN_LINE = ["인공지능은", "데이터를", "학습한다"]
+
+
 def _korean_runs() -> list[Run]:
     return [
-        *_spaced(10, 700, ["인공지능은", "데이터를", "학습한다"]),
+        *_spaced(10, 700, KOREAN_LINE),
         *_spaced(14, 670, ["확률", "변수의", "분포"]),
         (KOREAN, 10, 72, 640, "역전파는"),  # 어절 안 글자는 간격 0이라 하나로 남는다
         (REGULAR, 10, 72, 610, "gradient descent uses the learning rate"),
     ]
+
+
+def _turned(matrix: tuple[int, int, int, int], x: int, y: int, words: list[str]) -> bytes:
+    """글자 행렬(Tm)로 돌린 10pt 한국어 줄. 어절은 글자 방향으로 0.29em씩 띄운다."""
+    a, b, c, d = matrix
+    size, offset, out = 10, 0.0, b""
+    for word in words:
+        tx, ty = round(x + a * offset, 2), round(y + b * offset, 2)
+        shown = word.encode("utf-16-be").hex()
+        out += f"BT /{KOREAN} {size} Tf {a} {b} {c} {d} {tx} {ty} Tm <{shown}> Tj ET\n".encode()
+        offset += len(word) * size + KOREAN_GAP_EM * size
+    return out
+
+
+# 1쪽: 직립 글. 2쪽부터: 같은 줄을 페이지 /Rotate 90, 글자 90·270·180도로 돌린 쪽.
+KOREAN_PAGES: list[PageSpec] = [
+    (b"", b"", _korean_runs()),
+    (b" /Rotate 90", b"", _spaced(10, 700, KOREAN_LINE)),
+    (b"", _turned((0, 1, -1, 0), 300, 200, KOREAN_LINE), []),
+    (b"", _turned((0, -1, 1, 0), 300, 600, KOREAN_LINE), []),
+    (b"", _turned((-1, 0, 0, -1), 400, 400, KOREAN_LINE), []),
+]
 
 
 def _objects(pages: list[PageSpec]) -> list[bytes]:
@@ -164,7 +189,7 @@ def build_render_pdf() -> bytes:
 
 
 def build_korean_pdf() -> bytes:
-    return _build([(b"", b"", _korean_runs())])
+    return _build(KOREAN_PAGES)
 
 
 def _build(pages: list[PageSpec]) -> bytes:
