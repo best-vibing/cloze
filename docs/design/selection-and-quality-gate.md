@@ -7,7 +7,7 @@
 
 | 항목 | 내용 |
 |---|---|
-| 입력 | 문서 전체 페이지의 tokens에서 대표 본문과 페이지별 제목급 줄을 구성한다. 선정·문자 제한·선택적 토큰 예산의 기준은 [analyze.py](../../cloze/core/analyze.py)다. 실제 Gemini 토큰 계산 연결은 미완료다. |
+| 입력 | 문서 전체 페이지의 tokens에서 대표 본문과 페이지별 제목급 줄을 구성한다. 선정·문자 제한·선택적 토큰 예산의 기준은 [analyze.py](../../cloze/core/analyze.py)다. 호출자는 같은 [GeminiClient](../../cloze/infra/gemini.py)의 `ask_llm`과 `count_tokens`를 주입할 수 있다. 운영 호출부 연결은 미완료다. |
 | 출력 | 구조화 출력으로 `{doc_type, preset, reason}`. `doc_type`은 정해진 목록(강의 슬라이드, 교재·본문, 논문, 단어장·용어집, 기타) 안에서만 [권장] |
 | 실패 | 형식 오류, 목록 밖 값, 타임아웃이면 기본 방식(개념 용어 [권장])으로 진행하고 사유를 기록한다. 예외를 던지지 않는다 |
 | 사용자에게 | 결과 화면에 "자동으로 '개념 용어' 방식을 골랐어요(이유: …)"를 보여 준다. 마음에 들지 않으면 다른 방식을 지정해 새 빈칸 세트를 만든다 |
@@ -18,7 +18,7 @@
 
 - 제목급 줄이 없는 페이지는 제목 조각을 만들지 않는다. 출력하는 조각의 줄 구분자를 문자 예산에 포함하고, 제목은 데이터 예산의 절반 이하만 사용해 대량 문서에서도 대표 본문 예산을 보존한다. 기준은 [build_analysis_prompt](../../cloze/core/analyze.py)와 [회귀 테스트](../../tests/test_analyze.py)다.
 - `analyze_document(..., count_tokens=...)`는 같은 모델의 전체 프롬프트를 계산하는 비동기 함수를 선택적으로 받는다. 생략 시 문자 제한만 적용하며 실제 토큰 상한을 보장하지 않는다. 계산과 생성 호출은 별도로 기록해야 한다.
-- SDK `google-genai 2.33.0`의 `client.aio.models.count_tokens(model=..., contents=prompt)` 및 `total_tokens`를 사용한 어댑터가 필요하다([공식 SDK 문서](https://googleapis.github.io/python-genai/)). 기존 GeminiClient는 계산 포트를 노출하지 않는다. 같은 모델·인증·수명·오류 변환을 재사용하는 infra 포트와 호출부 주입을 담당자와 협의해야 한다. 현재 기본 모델의 실제 API 지원 여부는 호출 검증하지 않았다.
+- `GeminiClient.count_tokens()`는 SDK의 `client.aio.models.count_tokens(model=..., contents=prompt)`와 `total_tokens`를 사용한다([공식 SDK 문서](https://googleapis.github.io/python-genai/)). 생성과 같은 모델·인증·세마포어·종료 보호·오류 변환을 재사용한다. 계산 결과는 생성의 실제 `usage_metadata`나 생성 전용 `on_attempt` 기록에 포함하지 않는다. 분석 함수에 두 메서드를 주입하는 통합 테스트는 완료했으며 운영 호출부 연결과 기본 모델의 실제 API 검증은 남아 있다.
 - 계산 함수를 주입하면 본문부터 축소하고 매번 재계산한다. 계산 요청은 최초 1회와 축소 단계마다 1회 추가되며, 생성은 성공 경로 1회다. 필수 지시문도 예산을 넘거나 알려진 계산 오류가 나면 생성 없이 기본값으로 전환한다.
 - LLMTransientError 전파와 자동 분석 폴백 사이의 정책은 팀 회의에서 최종 결정할 예정입니다. 현재 구현은 분석 단계에서 concept 폴백을 적용하며, 기존 Gemini 클라이언트의 재시도 정책은 변경하지 않았습니다.
 - PR #15의 실제 Token 및 PageTokens 모델과의 통합 검증이 필요합니다. 현재는 Protocol 기반 호환성과 독립 단위 테스트만 확인했으며, 실제 모델을 이용한 통합 실행은 수행하지 않았습니다.

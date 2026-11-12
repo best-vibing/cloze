@@ -178,12 +178,14 @@ version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "google-genai" },
+    { name = "httpx" },
     { name = "jsonschema" },
     { name = "pdfplumber" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pypdfium2" },
+    { name = "referencing" },
 ]
 
 [package.dev-dependencies]
@@ -198,12 +200,14 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "google-genai", specifier = ">=2.33" },
+    { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "pdfplumber", specifier = ">=0.11.10" },
     { name = "pillow", specifier = ">=13.0" },
     { name = "pydantic", specifier = ">=2.14" },
     { name = "pydantic-settings", specifier = ">=2.16" },
     { name = "pypdfium2", specifier = ">=5.14" },
+    { name = "referencing", specifier = ">=0.37,<1" },
 ]
 
 [package.metadata.requires-dev]
