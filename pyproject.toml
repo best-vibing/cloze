@@ -5,12 +5,15 @@ description = "PDF 빈칸 학습 서비스"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "alembic>=1.20.1",
     "google-genai>=2.33",
     "pdfplumber>=0.11.10",
     "pillow>=13.0",
+    "psycopg[binary]>=3.3.8",
     "pydantic>=2.14",
     "pydantic-settings>=2.16",
     "pypdfium2>=5.14",
+    "sqlalchemy[asyncio]>=2.1.8",
 ]
 
 [dependency-groups]
@@ -39,6 +42,11 @@ max-complexity = 10
 [tool.mypy]
 python_version = "3.13"
 strict = true
+
+[[tool.mypy.overrides]]
+# pypdfium2는 타입 정보(py.typed)를 제공하지 않는다.
+module = ["pypdfium2", "pypdfium2.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

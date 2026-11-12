@@ -32,9 +32,11 @@
 | `pipeline.prepare` | PDF 바이트 | 문서 추출 결과(페이지별 page 정보·이미지·tokens). 워커는 이것을 L2로 저장한다 | 공동 |
 | `pipeline.build` | 문서 추출 결과(새로 만든 것 또는 저장된 것), 정책, `ask_llm`, 건너뛸 페이지 번호, 저장된 분석 결과(있으면), 피할 token id | 페이지별 결과(1.4)를 **한 페이지씩 차례로 내보낸다.** 워커는 받는 대로 저장한다(L4) | 공동 |
 
+규칙 기반 선택기(`select/rule`)는 `ask_llm` 대신 문서 통계(`doc_stats`: 정규화한 단어의 빈도, 제목급 줄의 단어)를 받는다.
+
 `pipeline`을 `prepare`와 `build` 둘로 나눈 이유: 추출 결과를 저장했다가 다시 만들기에서 재사용하고(L2), 재실행 때 끝난 페이지를 건너뛰려면(L4) 워커가 중간에 끼어들 수 있어야 하기 때문이다.
 
-`filter`가 문서 전체를 받는 이유: 머리글·바닥글은 여러 페이지에서 같은 위치에 반복되는 글로 판정하므로 한 페이지만 봐서는 알 수 없다.
+`filter`가 문서 전체를 받는 이유: 머리글·바닥글은 여러 페이지에서 같은 위치에 반복되는 글로 판정하므로 한 페이지만 봐서는 알 수 없다. 기준을 넘는 위치 묶음은 모두 뺀다(두 장 모아찍기 PDF는 바닥글이 한 쪽에 두 번 나온다). 그렇게 확인된 바닥글 문구로 문서의 다른 곳(표지 등)에서 **줄 전체가 바닥글 구절로만 이루어져 있으면** 그 줄의 토큰도 `footer_phrase`로 뺀다. 본문 문장 속에 같은 구절이 나오면("Vibe coding is a way …") 학습 내용이므로 후보로 남긴다. 구절은 바닥글 줄을 구분 기호나 큰 간격으로 나눈 것이고, 토큰 두 개 이상인 구절만 맞춘다. 한 단어로 맞추면 본문의 정상 단어까지 빠지기 때문이다. 비교는 `word_key`(대소문자·앞뒤 부호·조사 무시)로 한다. 값과 규칙은 [`core/filter`](../../cloze/core/filter.py)가 기준이다.
 
 `cli`는 `--dump-stages`를 주면 단계마다 중간 결과를 JSON으로 남긴다. 담당자끼리 실제 파일을 주고받으며 계약을 맞춰 보기 위해서다.
 
@@ -58,10 +60,10 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "page": {"page_no": 3, "width_pt": 720, "height_pt": 540, "source": "textlayer"},
   "tokens": [
-    {"id": 12, "text": "Mitochondria", "bbox": [0.12, 0.31, 0.29, 0.35],
+    {"id": 12, "text": "Mitochondria,", "bbox": [0.12, 0.31, 0.30, 0.35], "word_bbox": [0.12, 0.31, 0.29, 0.35],
      "line_id": 4, "block_id": 1, "font_size": 18.0, "fontname": "Helvetica-Bold",
      "font_color": "#1a1a1a", "conf": 1.0}
   ],
@@ -76,14 +78,16 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 
 | 필드 | 뜻 |
 |---|---|
-| `schema_version` | 계약 버전. 필드를 바꿀 때 올린다 |
+| `schema_version` | 계약 버전. 필드를 바꿀 때 올린다. 2: `tokens[].word_bbox` 추가 |
 | `page.source` | `textlayer` 또는 `ocr` |
 | `tokens[].id` | 페이지 안에서만 고유한 정수. LLM에는 이 id로 보내고 이 id로 받는다 |
 | `bbox` | `[x0, y0, x1, y1]`, 페이지 기준 0~1, 좌상단 원점 |
+| `tokens[].word_bbox` | 앞뒤 문장 부호를 뺀 글자들의 bbox. 뗄 부호가 없으면 `null`(= `bbox`). 정답과 칠하는 범위는 이것을 쓴다. 이 필드가 없는 옛 토큰(`extract_version` 1)은 추출 버전이 달라 L2에서 재사용되지 않는다 |
 | `line_id`, `block_id` | 같은 줄·같은 문단 판정용. 품질 게이트의 "주변 문맥"과 구 연속성 검사에 쓴다 |
 | `fontname` | 폰트 이름. 규칙 기반 선택기가 굵은 글씨를 판정할 때 쓴다 |
 | `conf` | 인식 신뢰도. 텍스트 레이어는 1.0 |
-| `blanks[].bbox` | 묶인 토큰 bbox의 합집합 + 패딩 |
+| `blanks[].answer` | 토큰 원문에서 앞뒤 문장 부호를 뗀 글자. 한국어 조사는 떼지 않는다(v1은 어절 단위, [채점 1.1](grading-and-overlay.md#11-판정-순서)) |
+| `blanks[].bbox` | 묶인 토큰 `word_bbox`(없으면 `bbox`)의 합집합 + 패딩. 문장 부호는 칠하지 않는다. 부호를 뗀 변에는 패딩을 붙이지 않는다(패딩이 글자와 부호 사이 여백보다 커서 부호를 덮기 때문) |
 | `blanks[].type` | `text`, `number`, `term` |
 | `blanks[].style` | 입력칸 표시 정보(글자 크기 비율·글자색·배경색). [채점·입력칸 표시](grading-and-overlay.md) 3.1 |
 | `selection.source` | `gemini`, `fallback`(규칙 기반), `none`(게이트 미달로 빈칸 없음) |
