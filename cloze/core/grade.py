@@ -55,14 +55,17 @@ class Grading:
 def normalize(text: str) -> str:
     """비교용으로 글자를 다듬는다. NFKC, 대소문자 무시, 공백 정리, 문장부호 제거.
 
-    숫자 사이의 문장부호(``3.14`` 의 점, ``1,665`` 의 쉼표)는 남긴다.
-    지우면 ``31.4`` 와 ``3.14`` 가 같아진다.
+    숫자에 붙은 부호는 남긴다. 숫자 사이(``3.14`` 의 점, ``1,665`` 의 쉼표)와
+    숫자 앞의 ``-``·``.``(``-273``, ``.5``)다. 지우면 ``31.4`` 와 ``3.14``, ``-273`` 과
+    ``273`` 이 같아진다.
 
     Examples:
         >>> normalize("  Ｍitochondria!! ")
         'mitochondria'
         >>> normalize("3.14")
         '3.14'
+        >>> normalize("-273")
+        '-273'
     """
     text = unicodedata.normalize("NFKC", text).casefold()
     kept = [ch for i, ch in enumerate(text) if not _is_dropped_punct(text, i)]
@@ -72,8 +75,11 @@ def normalize(text: str) -> str:
 def _is_dropped_punct(text: str, i: int) -> bool:
     if not unicodedata.category(text[i]).startswith("P"):
         return False
-    between_digits = 0 < i < len(text) - 1 and text[i - 1].isdigit() and text[i + 1].isdigit()
-    return not between_digits
+    before_digit = i < len(text) - 1 and text[i + 1].isdigit()
+    after_digit = i > 0 and text[i - 1].isdigit()
+    # 숫자 앞 부호: 글 처음이거나 공백 뒤일 때만. "COVID-19"의 붙임표는 지운다.
+    leading_sign = text[i] in "-." and (i == 0 or text[i - 1].isspace())
+    return not (before_digit and (after_digit or leading_sign))
 
 
 def edit_distance(a: str, b: str) -> int:

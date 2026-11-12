@@ -26,6 +26,10 @@ JUDGE_CASES: list[tuple[str, AnswerKey, Verdict, str]] = [
     ("3.141", AnswerKey("3.14", type="number"), "correct", "유효숫자 범위 안(±0.005)"),
     ("3.15", AnswerKey("3.14", type="number"), "wrong", "유효숫자 범위 밖"),
     ("31.4", AnswerKey("3.14", type="number"), "wrong", "소수점을 지워 같아지지 않음"),
+    ("273", AnswerKey("-273", type="number"), "wrong", "음수 부호를 지우지 않음"),
+    ("-273.15", AnswerKey("-273.15", type="number"), "correct", "음수 소수"),
+    (".5", AnswerKey("0.5", type="number"), "correct", "앞의 0을 생략한 소수"),
+    ("COVID-19", AnswerKey("covid19"), "correct", "단어 안 붙임표는 지움"),
     ("3.141", AnswerKey("3.14", type="term"), "wrong", "숫자 칸이 아니면 숫자 비교 안 함"),
     ("세 개", AnswerKey("3", type="number"), "wrong", "숫자로 읽을 수 없는 입력"),
     # 4단계: near
