@@ -157,6 +157,22 @@ def test_footer_line_is_split_at_separator() -> None:
     assert reasons["coding | Kwon,"] == {"|": "has_symbol"}  # 구절 경계를 넘으면 맞지 않는다
 
 
+def test_footer_phrase_inside_body_sentence_is_kept() -> None:
+    # 본문 문장 속 구절은 학습 내용이다. 줄 전체가 바닥글 구절일 때만 뺀다.
+    cover = [(0.1, "Vibe coding is a way to build apps")]
+    reasons = _line_reasons(_footer_pages("Vibe coding", cover=cover))[1]
+    line = reasons["Vibe coding is a way to build apps"]
+    assert "Vibe" not in line
+    assert "coding" not in line
+    assert "footer_phrase" not in line.values()
+
+
+def test_footer_phrase_with_punctuation_inside_sentence_is_kept() -> None:
+    # word_key가 앞뒤 부호를 떼므로 "Vibe. coding"은 구절과 같아지지만, 줄 전체가 아니라 남는다.
+    reasons = _line_reasons(_footer_pages("Vibe coding", cover=[(0.1, "Vibe. coding helps")]))[1]
+    assert reasons["Vibe. coding helps"] == {}
+
+
 def _placed(id_: int, text: str, x0: float, top: float, line_id: int) -> Token:
     bbox = (x0, top, x0 + 0.05, top + 0.01)
     return Token(id=id_, text=text, bbox=bbox, line_id=line_id, font_size=9, fontname="R")
