@@ -87,8 +87,8 @@ def _reason(
 
 
 def _document_reasons(pages: list[PageTokens]) -> dict[_Key, ExcludeReason]:
-    """문서 전체를 봐야 아는 제외 사유. 반복 머리글·바닥글이 먼저이고, 그 문구가 다른 곳에
-    구절 전체로 나온 토큰은 footer_phrase다."""
+    """문서 전체를 봐야 아는 제외 사유. 반복 머리글·바닥글이 먼저이고, 다른 곳에서 줄 전체가
+    바닥글 구절로만 이루어진 줄(표지의 과목명·이름 등)의 토큰은 footer_phrase다."""
     repeated = _repeated_ids(pages)
     reasons: dict[_Key, ExcludeReason] = dict.fromkeys(repeated, "header_footer")
     phrases = _footer_phrases(pages, repeated)
@@ -151,7 +151,12 @@ def _footer_phrases(pages: list[PageTokens], repeated: set[_Key]) -> set[_Phrase
 
 
 def _split_phrases(page: PageTokens, tokens: list[Token]) -> list[_Phrase]:
-    """줄을 구분 기호나 큰 간격에서 나눠, 토큰 두 개 이상인 구절만 돌려준다."""
+    """줄을 구절로 나눠, 토큰 두 개 이상인 구절만 돌려준다."""
+    return [phrase for phrase in _segments(page, tokens) if len(phrase) >= MIN_PHRASE_TOKENS]
+
+
+def _segments(page: PageTokens, tokens: list[Token]) -> list[_Phrase]:
+    """줄을 구분 기호나 큰 간격에서 나눈다. 구분 기호는 빼고, 빈 구간은 버린다."""
     phrases: list[list[str]] = [[]]
     previous: Token | None = None
     for token in tokens:
@@ -160,7 +165,7 @@ def _split_phrases(page: PageTokens, tokens: list[Token]) -> list[_Phrase]:
         if not _is_separator(token.text):
             phrases[-1].append(word_key(token.text))
         previous = token
-    return [tuple(words) for words in phrases if len(words) >= MIN_PHRASE_TOKENS]
+    return [tuple(words) for words in phrases if words]
 
 
 def _starts_new_phrase(page: PageTokens, previous: Token | None, token: Token) -> bool:
@@ -177,23 +182,21 @@ def _is_separator(text: str) -> bool:
 
 
 def _phrase_ids(pages: list[PageTokens], phrases: set[_Phrase]) -> set[_Key]:
-    """바닥글 구절이 구절 전체로 나오는 줄의 토큰을 모은다. 구절은 줄을 넘지 않는다."""
+    """줄 전체가 바닥글 구절로만 이루어진 줄의 토큰(구분 기호 제외)을 모은다."""
     matched: set[_Key] = set()
     for page in pages:
         for tokens in _line_tokens(page):
-            matched |= {(page.page.page_no, t.id) for t in _matching_tokens(tokens, phrases)}
+            if _is_footer_phrase_line(page, tokens, phrases):
+                no = page.page.page_no
+                matched |= {(no, t.id) for t in tokens if not _is_separator(t.text)}
     return matched
 
 
-def _matching_tokens(tokens: list[Token], phrases: set[_Phrase]) -> list[Token]:
-    keys = [word_key(token.text) for token in tokens]
-    hits: list[Token] = []
-    for phrase in phrases:
-        size = len(phrase)
-        for start in range(len(keys) - size + 1):
-            if tuple(keys[start : start + size]) == phrase:
-                hits += tokens[start : start + size]
-    return hits
+def _is_footer_phrase_line(page: PageTokens, tokens: list[Token], phrases: set[_Phrase]) -> bool:
+    """줄을 바닥글과 같은 기준으로 나눈 구절이 모두 바닥글 구절이면 참이다. 본문 문장 속에
+    같은 구절이 나오면("Vibe coding is a way …") 학습 내용이므로 거짓이다."""
+    segments = _segments(page, tokens)
+    return bool(segments) and all(segment in phrases for segment in segments)
 
 
 def normalize_ko(text: str) -> str:
