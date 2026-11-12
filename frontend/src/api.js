@@ -41,6 +41,28 @@ async function request(method, path, { json, form, headers = {} } = {}) {
   return body;
 }
 
+// ---- 인증 (#35) ----
+export const login = (loginId, password) =>
+  request("POST", "/auth/login", { json: { login_id: loginId, password } });
+export const logout = () => request("POST", "/auth/logout");
+
+// ---- 문서 (#35) ----
+/** 업로드. key는 사용자 동작 한 번마다 crypto.randomUUID()로 만들고, 재전송에는 같은 키를 쓴다. */
+export function uploadDocument(file, preset = "auto", key = crypto.randomUUID()) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("preset", preset);
+  return request("POST", "/documents", { form, headers: { "Idempotency-Key": key } });
+}
+export const listDocuments = () => request("GET", "/documents");
+export const deleteDocument = (documentId) => request("DELETE", `/documents/${documentId}`);
+/** 다시 만들기. 업로드와 같은 이유로 Idempotency-Key를 붙인다. */
+export const remakeBlankSet = (documentId, preset = "auto", key = crypto.randomUUID()) =>
+  request("POST", `/documents/${documentId}/blank-sets`, {
+    json: { preset },
+    headers: { "Idempotency-Key": key },
+  });
+
 // ---- 빈칸 세트와 채점 (#58, #36) ----
 /** 세트 조회. 폴링 겸용이며, 응답에는 정답이 없다. */
 export const getBlankSet = (blankSetId) => request("GET", `/blank-sets/${blankSetId}`);
