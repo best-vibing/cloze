@@ -186,24 +186,33 @@ def _page_text(tokens: Sequence[AnalysisToken]) -> str:
     return "\n".join(_join_heading_lines(tokens, {token.line_id for token in tokens}))
 
 
+def _heading_fragment(number: int, tokens: Sequence[AnalysisToken]) -> str:
+    """실제 제목이 있는 페이지에만 제목 조각을 만든다."""
+    lines = extract_heading_lines(tokens)
+    return f"제목 페이지 {number}: " + json.dumps(lines, ensure_ascii=False) if lines else ""
+
+
+def _clip_analysis_fragment(fragment: str, available: int) -> str:
+    """구분자·페이지 라벨과 내용 시작 부분이 함께 담기는 조각만 출력한다."""
+    minimum = min(len(fragment) + 1, len(fragment.partition(": ")[0]) + 6)
+    return ("\n" + fragment)[:available] if available >= minimum else ""
+
+
 def build_analysis_prompt(pages: Sequence[Sequence[AnalysisToken]]) -> str:
     """페이지별 tokens에서 최대 12,000자의 분석 입력을 만든다.
 
     제목은 데이터 예산의 절반 이하, 본문은 나머지를 사용한다. 각 그룹은 짧은
     조각의 잔여 예산을 긴 조각에 균등 재분배한다. 제목의 잔여분도 본문에 준다.
+    빈 제목은 제외하고 출력 조각에 포함된 줄 구분자도 예산에 센다.
     지시문과 종료 표시를 보존한다. 문자 절단으로 JSON 조각은 잘릴 수 있으며
     실제 토큰 수를 보장하지 않는다.
     """
     indexed = list(enumerate(pages, start=1))
     selected = select_representative_pages(indexed, lambda page: _page_text(page[1]))
-    headings = [
-        f"제목 페이지 {number}: " + json.dumps(extract_heading_lines(tokens), ensure_ascii=False)
-        for number, tokens in indexed
-    ]
+    headings = list(filter(None, map(lambda page: _heading_fragment(*page), indexed)))
     bodies = [f"본문 페이지 {number}: " + _page_text(tokens) for number, tokens in selected]
     data_limit = MAX_ANALYSIS_INPUT_CHARS - len(_INSTRUCTIONS) - len(_DATA_END)
-    budget = data_limit
-    budget -= max(0, len(headings) + len(bodies) - 1)  # 줄 구분자도 먼저 예약한다.
+    budget = data_limit + 1  # 첫 출력 조각의 선행 구분자는 마지막에 제거한다.
     data: list[str] = []
     for fragments, available in ((headings, max(0, budget // 2)), (bodies, None)):
         remaining = budget if available is None else available
@@ -212,11 +221,13 @@ def build_analysis_prompt(pages: Sequence[Sequence[AnalysisToken]]) -> str:
         for rank, index in enumerate(
             sorted(range(len(fragments)), key=lambda i: len(fragments[i]))
         ):
-            clipped[index] = fragments[index][: max(0, remaining // (len(fragments) - rank))]
+            clipped[index] = _clip_analysis_fragment(
+                fragments[index], remaining // (len(fragments) - rank)
+            )
             remaining -= len(clipped[index])
         budget -= sum(map(len, clipped))
-        data.extend(clipped)
-    return _INSTRUCTIONS + limit_analysis_input("\n".join(data), data_limit) + _DATA_END
+        data.extend(filter(None, clipped))
+    return _INSTRUCTIONS + limit_analysis_input("".join(data)[1:], data_limit) + _DATA_END
 
 
 def _validated_result(response: object) -> dict[str, str]:

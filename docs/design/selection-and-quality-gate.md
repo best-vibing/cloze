@@ -16,6 +16,7 @@
 
 ### 구현 상태와 미완료 검증
 
+- 제목급 줄이 없는 페이지는 제목 조각을 만들지 않는다. 출력하는 조각의 줄 구분자를 문자 예산에 포함하고, 제목은 데이터 예산의 절반 이하만 사용해 대량 문서에서도 대표 본문 예산을 보존한다. 기준은 [build_analysis_prompt](../../cloze/core/analyze.py)와 [회귀 테스트](../../tests/test_analyze.py)다.
 - `analyze_document(..., count_tokens=...)`는 같은 모델의 전체 프롬프트를 계산하는 비동기 함수를 선택적으로 받는다. 생략 시 문자 제한만 적용하며 실제 토큰 상한을 보장하지 않는다. 계산과 생성 호출은 별도로 기록해야 한다.
 - SDK `google-genai 2.33.0`의 `client.aio.models.count_tokens(model=..., contents=prompt)` 및 `total_tokens`를 사용한 어댑터가 필요하다([공식 SDK 문서](https://googleapis.github.io/python-genai/)). 기존 GeminiClient는 계산 포트를 노출하지 않는다. 같은 모델·인증·수명·오류 변환을 재사용하는 infra 포트와 호출부 주입을 담당자와 협의해야 한다. 현재 기본 모델의 실제 API 지원 여부는 호출 검증하지 않았다.
 - 계산 함수를 주입하면 본문부터 축소하고 매번 재계산한다. 계산 요청은 최초 1회와 축소 단계마다 1회 추가되며, 생성은 성공 경로 1회다. 필수 지시문도 예산을 넘거나 알려진 계산 오류가 나면 생성 없이 기본값으로 전환한다.
