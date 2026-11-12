@@ -37,9 +37,10 @@ def question_region_ids(pages: list[PageTokens], header_footer: set[Key]) -> set
         marked = [line for line in lines if is_question_marker(line)]
         if not marked:
             continue
-        boundaries = _boundaries(page, {id_ for no, id_ in header_footer if no == page_no})
+        repeated = {id_ for no, id_ in header_footer if no == page_no}
+        boundaries = _boundaries(page, repeated)
         for line in marked:
-            region = _region(lines, line, boundaries)
+            region = _region(lines, line, boundaries, repeated)
             found |= {(page_no, token.id) for tokens in region for token in tokens}
     return found
 
@@ -84,12 +85,23 @@ def _size(line: Line) -> float:
     return round(max(token.font_size for token in line), 1)
 
 
-def _region(lines: list[Line], marked: Line, boundaries: list[float]) -> list[Line]:
-    """표시 줄이 속한 슬라이드 영역의 줄들. 경계가 있으면 경계 사이 전체, 없으면 이어지는 문단만."""
-    if boundaries:
-        lower, upper = _bounds(_top(marked), boundaries)
-        return [line for line in lines if lower < _top(line) <= upper]
-    return _paragraph(lines, marked)
+def _region(
+    lines: list[Line], marked: Line, boundaries: list[float], repeated: set[int]
+) -> list[Line]:
+    """표시 줄과 함께 뺄 줄들.
+
+    경계가 있고 표시 줄이 슬라이드 영역의 첫 줄(제목 자리)이면 영역 전체를 뺀다. 첫 줄을 셀 때
+    반복 머리글·바닥글 줄은 건너뛴다(반복되는 슬라이드 제목 아래의 "Example:"도 제목 자리다).
+    표시 줄이 본문 중간에 있으면("Example: learning rate …") 개념 슬라이드일 수 있으므로, 경계가
+    없을 때와 같이 표시 줄과 이어지는 문단만 뺀다."""
+    if not boundaries:
+        return _paragraph(lines, marked)
+    lower, upper = _bounds(_top(marked), boundaries)
+    slide = [line for line in lines if lower < _top(line) <= upper]
+    body = [line for line in slide if not all(token.id in repeated for token in line)]
+    if body and body[0] is marked:
+        return slide
+    return _paragraph(slide, marked)
 
 
 def _bounds(top: float, boundaries: list[float]) -> tuple[float, float]:

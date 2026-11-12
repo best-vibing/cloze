@@ -163,6 +163,7 @@ def _twoup_pages(slides: list[list[Run]]) -> list[PageSpec]:
 
 # 문제·예시 슬라이드(#66): 1쪽 위 예시/아래 개념, 2쪽 위 개념/아래 연습문제, 3쪽 둘 다 문제,
 # 4쪽 둘 다 개념인데 본문에 "for example"과 줄 첫머리의 "example,"이 있다(오탐 방지).
+# 5쪽 둘 다 개념인데 위 슬라이드 본문 중간에 "Example:" 줄이 있다(그 문단만 빠져야 한다).
 def _concept(y: int, title: str, first: str, second: str) -> list[Run]:
     # 개념 슬라이드 본문은 슬라이드마다 다르게 둔다. 같은 글이 같은 자리에 반복되면 바닥글로 잡힌다.
     return [
@@ -174,8 +175,8 @@ def _concept(y: int, title: str, first: str, second: str) -> list[Run]:
 
 QUESTION_SLIDES: list[list[Run]] = [
     [
-        (BOLD, 20, 72, 730, "Interval Estimation"),
-        (REGULAR, 12, 72, 700, "Example: To estimate the average tensile strength of steel wires,"),
+        (BOLD, 20, 72, 730, "Example: Interval Estimation"),
+        (REGULAR, 12, 72, 700, "To estimate the average tensile strength of steel wires,"),
         (REGULAR, 12, 72, 680, "30 samples were tested. Find the 95% confidence interval."),
         (REGULAR, 12, 72, 640, "Solution: 62.5 plus or minus 1.343"),
     ],
@@ -214,6 +215,18 @@ QUESTION_SLIDES: list[list[Run]] = [
         "Evaluation",
         "Tests and review catch errors that the model makes, and",
         "the API key stays outside the repository.",
+    ),
+    [
+        (BOLD, 20, 72, 730, "Gradient Descent"),
+        (REGULAR, 12, 72, 700, "Gradient descent minimizes the loss function iteratively."),
+        (REGULAR, 12, 72, 680, "Example: learning rate controls the step size"),
+        (REGULAR, 12, 72, 640, "Momentum accelerates convergence on flat regions."),
+    ],
+    _concept(
+        350,
+        "Backpropagation",
+        "Backpropagation applies the chain rule layer by layer,",
+        "and the optimizer updates every weight with its gradient.",
     ),
 ]
 

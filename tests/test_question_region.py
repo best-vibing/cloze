@@ -73,6 +73,16 @@ def test_marker_word_inside_sentence_is_not_a_question(regions: Regions) -> None
     assert {"Agents", "agent", "example", "example,", "tests."} <= page["kept_upper"]
 
 
+def test_marker_line_in_body_excludes_only_its_paragraph(regions: Regions) -> None:
+    # 표시 줄이 슬라이드 첫 줄(제목 자리)이 아니면 개념 슬라이드일 수 있다. 그 문단만 뺀다.
+    page = regions[4]
+    assert page["upper"] == {"Example:", "learning", "rate", "controls", "the", "step", "size"}
+    assert {"Gradient", "Descent", "minimizes", "loss", "Momentum", "convergence"} <= page[
+        "kept_upper"
+    ]
+    assert page["lower"] == set()
+
+
 @pytest.mark.parametrize(
     "line",
     [
