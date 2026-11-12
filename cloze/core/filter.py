@@ -213,6 +213,11 @@ def word_key(text: str) -> str:
     return normalize_ko(text.strip(EDGE_PUNCTUATION)).casefold()
 
 
+def strip_punctuation(text: str) -> str:
+    """정답에 쓸 글자: 앞뒤 문장 부호를 뗀다. 떼고 나서 아무것도 남지 않으면 원문 그대로다."""
+    return text.strip(EDGE_PUNCTUATION) or text
+
+
 def token_reason(text: str, include_numbers: bool) -> ExcludeReason | None:
     """토큰 하나만 보고 제외 사유를 돌려준다. 후보로 둘 수 있으면 None이다."""
     word = text.strip(EDGE_PUNCTUATION)
