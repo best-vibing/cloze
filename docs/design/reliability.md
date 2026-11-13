@@ -26,7 +26,7 @@
 위 표의 재시도와 재배달은 각자 횟수를 세므로, 그대로 두면 세트가 `running`에 남는 경로가 생긴다. 그래서 **실행 횟수의 기준을 Postgres 하나로 둔다.**
 
 1. 작업을 시작하면 `blank_sets.run_count`를 1 올린다.
-2. `run_count`가 상한(4회 [가설]: 첫 실행 + 재시도 2 + 재배달 여유 1)을 넘으면 처리하지 않고 `failed`(`processing_failed`)로 기록한 뒤 ack한다. 매번 워커를 죽이는 PDF가 끝없이 재배달되는 것(독 메시지)을 이 규칙이 끊는다. `run_count`는 무거운 처리 **전에** 커밋한다. 재시작한 워커가 수 초 안에 다시 읽으므로, 커밋 전에 죽으면 횟수가 오르지 않아 상한이 동작하지 않는다([ADR-012](../decisions/ADR-012-fast-redelivery-with-run-limit.md)).
+2. `run_count`가 상한(4회 [가설]: 첫 실행 + 재시도 2 + 재배달 여유 1)을 넘으면 처리하지 않고 `failed`(`processing_failed`)로 기록한 뒤 ack한다. 매번 워커를 죽이는 PDF가 끝없이 재배달되는 것(독 메시지)을 이 규칙이 끊는다. `run_count`는 무거운 처리 **전에** 커밋한다. 재시작한 워커가 수 초 안에 다시 읽으므로, 커밋 전에 죽으면 횟수가 오르지 않아 상한이 동작하지 않는다([ADR-013](../decisions/ADR-013-fast-redelivery-with-run-limit.md)).
 3. 일시적 오류(`LLMTransientError`)나 작업 제한 시간 초과가 나면, `run_count`가 상한에 닿았으면 `failed`(`processing_failed`)로 기록하고 정상 종료한다. 아니면 예외를 다시 던져 재시도에 맡긴다. 미들웨어의 재시도 횟수는 이 상한보다 크게 둬서 판단을 Postgres 쪽이 하게 한다.
 4. 정리 작업이 `queued`·`running`인 채로 `updated_at`이 30분 [가설] 넘게 멈춘 세트를 찾는다. Redis에서 작업이 사라진 경우(AOF가 저장하기 전의 재시작 등)다. 다시 등록하고, `run_count`가 상한이면 `failed`로 끝낸다. 같은 정리 작업이 DB 행이 없는 원본 파일(저장 뒤 DB 기록에 실패한 업로드)도 지운다.
 
@@ -37,7 +37,7 @@
 | 업로드당 페이지 상한 | 30쪽 | 비용 통제 |
 | 업로드 검사 하위 프로세스 | 제한 시간 5초, 메모리 256MB [가설] | API가 쪽수·암호화·JS 포함 여부를 읽을 때 파서를 API 프로세스 안에서 돌리지 않는다(파서 격리) |
 | 작업 제한 시간 (Taskiq `timeout` 라벨) | 8분 | 30쪽 처리 시간을 측정한 뒤 조정 |
-| `idle_timeout` (RedisStreamBroker) | 15분 | 기본값은 `600000`(밀리초, 10분). 이 시간 동안 ack가 없으면 `XAUTOCLAIM`으로 다른 워커가 넘겨받는다 [확인]. 단, **그 뒤 새 작업이 들어올 때** 넘겨받는다 [확인, [PR #91](https://github.com/best-vibing/cloze/pull/91)]. 같은 워커가 재시작하면 바로 다시 읽는다([ADR-012](../decisions/ADR-012-fast-redelivery-with-run-limit.md)) |
+| `idle_timeout` (RedisStreamBroker) | 15분 | 기본값은 `600000`(밀리초, 10분). 이 시간 동안 ack가 없으면 `XAUTOCLAIM`으로 다른 워커가 넘겨받는다 [확인]. 단, **그 뒤 새 작업이 들어올 때** 넘겨받는다 [확인, [PR #91](https://github.com/best-vibing/cloze/pull/91)]. 같은 워커가 재시작하면 바로 다시 읽는다([ADR-013](../decisions/ADR-013-fast-redelivery-with-run-limit.md)) |
 | Gemini 호출당 타임아웃 | 측정 후 결정 | 응답 지연을 실측한 뒤 정함 |
 | 이미지 서명 URL 만료 | 15분 [가설] | 만료되면 프론트가 세트를 다시 조회해 새 URL을 받는다 |
 
@@ -71,7 +71,7 @@ Stream 방식은 "최소 한 번 실행"이므로 같은 작업이 두 번 돌 �
 | 사용자 동시 작업 | 진행 중(`queued`·`running`) 세트 수 | 2개 | `api` | `too_many_running` |
 | 서비스 전체 비용 | 하루 Gemini 호출 수(`llm_calls`의 오늘 기록 + 진행 중 세트의 남은 쪽수 + 이번 요청 쪽수) | 실측 후 결정 | `api`(작업 등록 전) | `service_limit_exceeded`로 거절. 처리 도중에 끊지 않도록 등록 단계에서만 막는다 |
 | 폴링 | 클라이언트 조회 간격 | 2초 | `frontend` | — |
-| 워커 | 프로세스 하나당 동시 작업 | 1개(`--max-async-tasks 1`). 늘리려면 `--workers`로 프로세스를 늘린다. 컨테이너를 늘리면 컨슈머 이름이 겹친다([ADR-012](../decisions/ADR-012-fast-redelivery-with-run-limit.md)) | `worker` 설정 | 큐에서 대기 |
+| 워커 | 프로세스 하나당 동시 작업 | 1개(`--max-async-tasks 1`). 늘리려면 `--workers`로 프로세스를 늘린다. 컨테이너를 늘리면 컨슈머 이름이 겹친다([ADR-013](../decisions/ADR-013-fast-redelivery-with-run-limit.md)) | `worker` 설정 | 큐에서 대기 |
 | 작업 안의 Gemini 호출 | 동시에 보내는 페이지 수 | 4개 | `infra/gemini`(세마포어) | 순서대로 대기 |
 
 ### 5.1 발표 설정
