@@ -105,7 +105,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `GET /images/{key}` | 쿼리 `exp`(만료 시각), `sig`(서명) | `200` 이미지. 서명이 맞고 만료 전이며, 요청자가 소유자이고 문서가 삭제 표시되지 않았을 때만. 아니면 `not_found` |
 | `POST /documents` | multipart: `file`, `preset`(기본 `auto`). 헤더 `Idempotency-Key` | `202` `{document_id, blank_set_id}`. 같은 사용자가 같은 PDF를 올리면 기존 `document_id`를 돌려준다 |
 | `POST /documents/{id}/blank-sets` | `{preset}`. 헤더 `Idempotency-Key` | `202` `{blank_set_id}`. 같은 요청 키면 기존 세트 ID |
-| `GET /documents` | — | `200` 내 문서 목록, 문서마다 세트 요약(`blank_set_id`, `preset_applied`, `status`, `created_at`) |
+| `GET /documents` | — | `200` 내 문서 목록 `[{document_id, filename, blank_sets}]`. `blank_sets`는 그 문서의 세트 요약 배열(`blank_set_id`, `preset_applied`, `status`, `created_at`) |
 | `GET /blank-sets/{id}` | — | `200` 아래 예시. 폴링 겸용 |
 | `POST /blank-sets/{id}/attempts` | `{answers: {blank_id: 입력}}` | `200` `{attempt_id, results: {blank_id: correct / near / wrong}, score, after_reveal}`. 횟수 제한 없음 |
 | `GET /blank-sets/{id}/attempts` | — | `200` 내 시도 목록 `[{attempt_id, submitted_at, score, after_reveal, revealed_at}]`. 처음 풀이와 복습을 나눠 볼 때 쓴다 |
@@ -130,13 +130,47 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 }
 ```
 
+`partial` 예시. 12쪽 중 2쪽(2쪽·7쪽)이 실패한 경우다. `pages`에는 성공한 쪽 10개가 들어가고, 실패한 쪽이 빠져 `page_no`가 이어지지 않는다(아래는 앞의 두 항목만 보였다).
+
+```json
+{
+  "blank_set_id": "6f1c…",
+  "status": "partial",
+  "progress": {"done": 12, "total": 12},
+  "preset_requested": "auto",
+  "preset_applied": "concept",
+  "preset_reason": "강의 슬라이드로 보여 개념 용어 방식을 골랐어요",
+  "pages": [
+    {"page_no": 1, "image_url": "https://…", "width_pt": 720, "height_pt": 540, "blanks": [/* … */]},
+    {"page_no": 3, "image_url": "https://…", "width_pt": 720, "height_pt": 540, "blanks": [/* … */]}
+  ]
+}
+```
+
+`failed` 예시. 결과가 없으므로 `pages`는 비어 있고 `error`가 들어간다. `preset_applied`·`preset_reason`은 분석 전에 끝났으면 `null`이다.
+
+```json
+{
+  "blank_set_id": "6f1c…",
+  "status": "failed",
+  "progress": {"done": 12, "total": 12},
+  "preset_requested": "auto",
+  "preset_applied": null,
+  "preset_reason": null,
+  "pages": [],
+  "error": {"code": "unreadable_pdf", "message": "인식이 잘 안 됐어요, 다시 올려 주세요."}
+}
+```
+
 **인증:** 웹 페이지와 `POST /auth/login` 외의 모든 API와 `/images`는 세션 쿠키가 필요하다(없으면 `unauthorized`). 서버는 요청마다 사용자가 존재하고 쿠키의 `session_version`이 맞는지 확인한다. 상태를 바꾸는 요청은 `Origin`이 자기 주소일 때만 받는다(CSRF 방어). 쿠키의 Secure 속성은 설정 `COOKIE_SECURE`(기본 켬)로 로컬 개발에서만 끌 수 있다.
 
 **계정 관리:** API가 아니라 CLI로 한다. 가입 엔드포인트는 없다(ADR-007). `create-user`(아이디·비밀번호·표시 이름), `set-password`(비밀번호 재설정, `session_version`을 올려 기존 세션을 끊음), `delete-user`(그 사용자의 문서에 삭제 표시 → 정리 작업이 실제 삭제, 세션도 바로 끊김).
 
 `image_url`은 API의 `/images/{key}?exp=…&sig=…` 경로이고, 짧게 만료된다(만료 시간은 [신뢰성 설계](reliability.md) 2절). 이미지를 불러오다 만료로 실패하면 프론트는 `GET /blank-sets/{id}`를 한 번 다시 불러 새 URL을 받는다.
 
-`queued`·`running`일 때는 `pages`가 비어 있고 `progress`만 의미가 있다. `failed`일 때는 `error: {code, message}`가 들어간다.
+`queued`·`running`일 때는 `pages`가 비어 있고 `progress`만 의미가 있다. `failed`일 때는 `error: {code, message}`가 들어가고 `pages`는 비어 있다.
+
+`partial`일 때는 **실패한 쪽을 `pages`에서 뺀다.** 실패한 쪽은 가린 이미지가 없어서 화면이 그릴 수 없기 때문이다. 즉 `pages`는 "풀 수 있는 쪽"이고, 빠진 쪽은 `page_no`의 틈으로 알 수 있다(위 `partial` 예시에서 2쪽이 빠졌다).
 
 | `status` | 뜻 |
 |---|---|
@@ -154,7 +188,9 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `processing_failed` | 실행 횟수 상한까지 일시적 오류·제한 시간 초과·워커 중단이 반복됨 |
 | `document_deleted` | 처리 중에 문서가 삭제됨 |
 
-`progress`는 `{done: 처리를 마친 쪽 수, total: 전체 쪽 수}`다. 실패한 쪽도 "마친" 것으로 센다. 그래야 `done = total`이 "작업이 끝났다"와 같은 뜻이 된다.
+`progress`는 `{done: 처리를 마친 쪽 수, total: 전체 쪽 수}`다. 실패한 쪽도 "마친" 것으로 센다. 그래야 `done = total`이 "작업이 끝났다"와 같은 뜻이 된다. 따라서 끝 상태(`done`·`partial`·`failed`)에서는 항상 `done = total`이고, `total`은 업로드 때 읽은 쪽수라 `failed`에서도 알 수 있다.
+
+`partial`에서는 `progress`와 `pages`의 길이가 다르다. `progress.done`은 "처리를 시도한 쪽"이고 `pages`의 길이는 "풀 수 있는 쪽"이다. 화면에 둘을 그대로 나란히 두면 숫자가 어긋나 보이니, `partial`이면 "12쪽 중 10쪽을 만들었어요"처럼 한 문장으로 합치는 편이 낫다.
 
 ## 3. 오류 형식과 코드
 
