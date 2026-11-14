@@ -1,6 +1,7 @@
 """save_page_blanks 확인. test_db와 같이 로컬에 DB가 없으면 건너뛰고, CI에서는 실패시킨다.
 
 테스트는 커밋하지 않는다. 세션을 닫으면 롤백되므로 DB에 행이 남지 않는다.
+동시 저장 테스트만 커밋하고, 끝나면 그 세트의 행을 지운다.
 """
 
 import asyncio
@@ -9,8 +10,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 import pytest
-from sqlalchemy import func, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import delete, func, select, text
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from cloze.config import load_settings
@@ -126,5 +127,49 @@ def test_save_does_not_commit() -> None:
             assert await other.scalar(count) == 0
             await session.rollback()
             assert await session.scalar(count) == 0
+
+    _run(test)
+
+
+async def _wait_until_lock_wait(sessions: Sessions, pid: int) -> None:
+    async with sessions() as watcher:
+        for _ in range(100):
+            waiting = await watcher.scalar(
+                text("SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = :pid"),
+                {"pid": pid},
+            )
+            if waiting:
+                return
+            # pg_stat_activity는 트랜잭션 안에서 처음 읽은 값을 계속 보여 준다.
+            await watcher.rollback()
+            await asyncio.sleep(0.05)
+    raise AssertionError("둘째 저장이 첫째 저장의 커밋을 기다리지 않았다")
+
+
+def test_concurrent_saves_of_same_page_leave_one_copy() -> None:
+    # 재등록과 죽은 작업 회수가 겹치면 같은 세트를 두 워커가 동시에 저장한다(ADR-013).
+    set_id = uuid.uuid4()
+    first = [_blank(1, "A1"), _blank(2, "A2")]
+    second = [_blank(1, "B1"), _blank(2, "B2")]
+
+    async def test(sessions: Sessions) -> None:
+        try:
+            async with sessions() as worker_1, sessions() as worker_2:
+                await save_page_blanks(worker_1, set_id, 1, first)
+                pid = await worker_2.scalar(text("SELECT pg_backend_pid()"))
+                saving = asyncio.create_task(save_page_blanks(worker_2, set_id, 1, second))
+                try:
+                    await _wait_until_lock_wait(sessions, pid)
+                    await worker_1.commit()
+                    with pytest.raises(IntegrityError):
+                        await saving
+                finally:
+                    saving.cancel()
+            async with sessions() as session:
+                assert await _page(session, set_id, 1) == first
+        finally:
+            async with sessions() as session:
+                await session.execute(delete(BlankRow).where(BlankRow.set_id == set_id))
+                await session.commit()
 
     _run(test)

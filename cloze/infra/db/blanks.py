@@ -14,7 +14,12 @@ from cloze.infra.db import Base
 
 class BlankRow(Base):
     __tablename__ = "blanks"
-    __table_args__ = (Index("ix_blanks_set_id_page_no", "set_id", "page_no"),)
+    # 같은 쪽을 두 워커가 동시에 저장하면 둘째의 DELETE는 첫째의 커밋 전 행을 보지 못한다.
+    # 유일 인덱스가 있으면 둘째는 첫째의 커밋을 기다린 뒤 UniqueViolation으로 실패한다.
+    # 두 벌이 남지 않고, 실패한 작업은 재시도 때 blank_set_pages를 보고 그 쪽을 건너뛴다.
+    __table_args__ = (
+        Index("ix_blanks_set_id_page_no_order", "set_id", "page_no", "order", unique=True),
+    )
 
     # ADR-006: 모든 ID는 무작위 UUID다. API의 blank_id가 이 값이다.
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
