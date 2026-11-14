@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 # [가설] concept 프리셋의 단어 100개당 빈칸 수. 문서에 값이 없어 임시로 정했다.
 DEFAULT_DENSITY = 5.0
 
@@ -34,6 +34,8 @@ class Token(BaseModel):
     id: int
     text: str
     bbox: BBox
+    # 앞뒤 문장 부호를 뺀 글자들의 bbox. 뗄 부호가 없으면 None이고, 그때는 bbox와 같다.
+    word_bbox: BBox | None = None
     line_id: int
     font_size: float
     fontname: str

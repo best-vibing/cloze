@@ -32,6 +32,7 @@ def test_token_dumps_contract_field_names() -> None:
         "id": 12,
         "text": "Mitochondria",
         "bbox": [0.12, 0.31, 0.29, 0.35],
+        "word_bbox": None,
         "line_id": 4,
         "font_size": 18.0,
         "fontname": "Helvetica-Bold",

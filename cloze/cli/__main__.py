@@ -11,7 +11,7 @@ from pathlib import Path
 
 from cloze.core.extract import EXTRACT_VERSION, extract_tokens
 from cloze.core.extract.render import draw_boxes, render_page
-from cloze.core.filter import filter_candidates
+from cloze.core.filter import filter_candidates, strip_punctuation
 from cloze.core.models import (
     DEFAULT_DENSITY,
     SCHEMA_VERSION,
@@ -112,8 +112,9 @@ def _mask_page(
 
 
 def _answers(page: PageTokens, selection: Selection) -> list[str]:
-    """칸마다 정답: 묶인 토큰 원문을 공백으로 잇는다."""
-    texts = {token.id: token.text for token in page.tokens}
+    """칸마다 정답: 묶인 토큰 원문에서 앞뒤 문장 부호를 떼고 공백으로 잇는다.
+    한국어 조사는 떼지 않는다(v1은 어절 단위, grading-and-overlay.md 1.1절)."""
+    texts = {token.id: strip_punctuation(token.text) for token in page.tokens}
     return [" ".join(texts[id_] for id_ in span) for span in selection.spans]
 
 

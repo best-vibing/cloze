@@ -8,6 +8,21 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # DB 테스트를 건너뛰지 않고 돌리려고 PostgreSQL을 함께 띄운다(아키텍처 9.1 CI 행).
+    # 계정·주소는 docker-compose.yml, config.py 기본값과 같다.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: cloze
+          POSTGRES_PASSWORD: cloze
+          POSTGRES_DB: cloze
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cloze"
+          --health-interval 2s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v7
       # setup-uv는 주 버전 태그(v10)를 제공하지 않아 정확한 버전으로 고정한다
@@ -22,5 +37,7 @@ jobs:
         run: uv run mypy cloze tests
       - name: 보안 검사
         run: uv run bandit -r cloze -q
+      - name: 마이그레이션
+        run: uv run alembic upgrade head
       - name: 테스트
         run: uv run pytest
