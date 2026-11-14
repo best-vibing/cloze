@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from cloze.core.models import DEFAULT_DENSITY, Policy, Token
+from cloze.core.models import DEFAULT_DENSITY, Blank, Policy, Token
 
 
 def test_policy_defaults_follow_contract() -> None:
@@ -37,3 +37,33 @@ def test_token_dumps_contract_field_names() -> None:
         "font_size": 18.0,
         "fontname": "Helvetica-Bold",
     }
+
+
+def _contract_blank() -> dict[str, object]:
+    # docs/design/data-contract.md 1.4 예시의 blanks 항목에 order만 더했다.
+    return {
+        "token_ids": [12],
+        "answer": "Mitochondria",
+        "bbox": [0.115, 0.305, 0.295, 0.355],
+        "type": "term",
+        "hint": "세포 소기관",
+        "variants": [],
+        "answer_group": None,
+        "style": {"font_size_ratio": 0.025, "font_color": "#1a1a1a", "bg_color": "#ffffff"},
+        "order": 1,
+    }
+
+
+def test_blank_accepts_contract_example() -> None:
+    data = _contract_blank()
+    assert Blank.model_validate(data).model_dump(mode="json") == data
+
+
+def test_blank_rejects_empty_token_ids() -> None:
+    with pytest.raises(ValidationError):
+        Blank.model_validate({**_contract_blank(), "token_ids": []})
+
+
+def test_blank_rejects_unknown_type() -> None:
+    with pytest.raises(ValidationError):
+        Blank.model_validate({**_contract_blank(), "type": "phrase"})
