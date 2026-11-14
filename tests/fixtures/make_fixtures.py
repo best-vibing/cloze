@@ -1,4 +1,4 @@
-"""tests/fixtures/의 sample.pdf, render.pdf, korean.pdf, twoup.pdf를 표준 라이브러리만으로 만든다.
+"""tests/fixtures/의 PDF(sample, render, korean, twoup, questions)를 표준 라이브러리로 만든다.
 
 실행: uv run python tests/fixtures/make_fixtures.py
 """
@@ -201,12 +201,82 @@ TWOUP_SLIDES: list[list[Run]] = [
 ]
 
 
-def _twoup_pages() -> list[PageSpec]:
-    pairs = zip(TWOUP_SLIDES[::2], TWOUP_SLIDES[1::2], strict=True)
+def _twoup_pages(slides: list[list[Run]]) -> list[PageSpec]:
+    pairs = zip(slides[::2], slides[1::2], strict=True)
     return [
         (b"", b"", [*upper, *_slide_footer(420), *lower, *_slide_footer(30)])
         for upper, lower in pairs
     ]
+
+
+# 문제·예시 슬라이드(#66): 1쪽 위 예시/아래 개념, 2쪽 위 개념/아래 연습문제, 3쪽 둘 다 문제,
+# 4쪽 둘 다 개념인데 본문에 "for example"과 줄 첫머리의 "example,"이 있다(오탐 방지).
+# 5쪽 둘 다 개념인데 위 슬라이드 본문 중간에 "Example:" 줄이 있다(그 문단만 빠져야 한다).
+def _concept(y: int, title: str, first: str, second: str) -> list[Run]:
+    # 개념 슬라이드 본문은 슬라이드마다 다르게 둔다. 같은 글이 같은 자리에 반복되면 바닥글로 잡힌다.
+    return [
+        (BOLD, 20, 72, y, title),
+        (REGULAR, 12, 72, y - 30, first),
+        (REGULAR, 12, 72, y - 50, second),
+    ]
+
+
+QUESTION_SLIDES: list[list[Run]] = [
+    [
+        (BOLD, 20, 72, 730, "Example: Interval Estimation"),
+        (REGULAR, 12, 72, 700, "To estimate the average tensile strength of steel wires,"),
+        (REGULAR, 12, 72, 680, "30 samples were tested. Find the 95% confidence interval."),
+        (REGULAR, 12, 72, 640, "Solution: 62.5 plus or minus 1.343"),
+    ],
+    _concept(
+        350,
+        "Context window",
+        "The model reads only the tokens inside its context window,",
+        "so the agent summarizes long files before editing.",
+    ),
+    _concept(
+        730,
+        "Prompting",
+        "A prompt gives the model context, examples and the task,",
+        "and the agent plans before it edits the file.",
+    ),
+    [
+        (BOLD, 20, 72, 350, "Exercise 1"),
+        (REGULAR, 12, 72, 320, "Write a prompt that makes the agent plan before editing."),
+        (REGULAR, 12, 72, 300, "Explain why the context window limits the plan."),
+    ],
+    [
+        (BOLD, 20, 72, 730, "Q1. What does the agent do first?"),
+        (REGULAR, 12, 72, 700, "Choose one: plan, edit, summarize."),
+    ],
+    [
+        (KOREAN, 20, 72, 350, "문제 2"),
+        (REGULAR, 12, 72, 320, "Describe the context window in one sentence."),
+    ],
+    [
+        (BOLD, 20, 72, 730, "Agents"),
+        (REGULAR, 12, 72, 700, "An agent loops over tools until the task is done, for example"),
+        (REGULAR, 12, 72, 680, "example, the agent plans, edits the file and runs the tests."),
+    ],
+    _concept(
+        350,
+        "Evaluation",
+        "Tests and review catch errors that the model makes, and",
+        "the API key stays outside the repository.",
+    ),
+    [
+        (BOLD, 20, 72, 730, "Gradient Descent"),
+        (REGULAR, 12, 72, 700, "Gradient descent minimizes the loss function iteratively."),
+        (REGULAR, 12, 72, 680, "Example: learning rate controls the step size"),
+        (REGULAR, 12, 72, 640, "Momentum accelerates convergence on flat regions."),
+    ],
+    _concept(
+        350,
+        "Backpropagation",
+        "Backpropagation applies the chain rule layer by layer,",
+        "and the optimizer updates every weight with its gradient.",
+    ),
+]
 
 
 def _objects(pages: list[PageSpec]) -> list[bytes]:
@@ -243,7 +313,11 @@ def build_korean_pdf() -> bytes:
 
 
 def build_twoup_pdf() -> bytes:
-    return _build(_twoup_pages())
+    return _build(_twoup_pages(TWOUP_SLIDES))
+
+
+def build_questions_pdf() -> bytes:
+    return _build(_twoup_pages(QUESTION_SLIDES))
 
 
 def _build(pages: list[PageSpec]) -> bytes:
@@ -267,3 +341,4 @@ if __name__ == "__main__":
     Path(__file__).with_name("render.pdf").write_bytes(build_render_pdf())
     Path(__file__).with_name("korean.pdf").write_bytes(build_korean_pdf())
     Path(__file__).with_name("twoup.pdf").write_bytes(build_twoup_pdf())
+    Path(__file__).with_name("questions.pdf").write_bytes(build_questions_pdf())

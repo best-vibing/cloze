@@ -18,6 +18,7 @@ type ExcludeReason = Literal[
     "number",
     "header_footer",
     "footer_phrase",
+    "question_region",
 ]
 
 
