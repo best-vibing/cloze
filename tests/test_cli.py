@@ -88,7 +88,7 @@ def test_mask_writes_webp_and_json_per_page(tmp_path: Path) -> None:
 def test_mask_json_lists_blanks_in_order(tmp_path: Path) -> None:
     _mask(tmp_path)
     page = _load(tmp_path, 1)
-    assert page["extract_version"] == 2
+    assert page["extract_version"] == 3
     assert page["page"]["page_no"] == 1
     blanks = page["blanks"]
     assert [blank["order"] for blank in blanks] == list(range(1, len(blanks) + 1))

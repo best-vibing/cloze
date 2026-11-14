@@ -13,7 +13,7 @@ from cloze.core.filter import EDGE_PUNCTUATION
 from cloze.core.models import BBox, PageInfo, PageTokens, Token
 
 # 렌더링 크기·이미지 형식·좌표 계산·단어 나누기가 바뀌면 올린다(pdf-extraction.md 3절).
-EXTRACT_VERSION = 2
+EXTRACT_VERSION = 3
 # [가설] 읽는 방향으로 본 top 차이가 이 값(pt) 이하이면 같은 줄로 본다.
 LINE_TOLERANCE_PT = 3.0
 # [가설] 글자 사이 간격이 글자 크기의 이 비율을 넘으면 다른 단어로 본다(pdf-extraction.md 2절).
