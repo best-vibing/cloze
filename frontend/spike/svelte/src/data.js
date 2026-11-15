@@ -77,9 +77,9 @@ function editDistance(a, b) {
 function judge(input, blank) {
   const given = normalize(input);
   const accepted = [blank.answer, ...blank.variants].map(normalize);
-  if (given && (accepted.includes(given) || accepted.includes(stripJosa(given)))) return "correct";
+  if (accepted.includes(given) || accepted.includes(stripJosa(given))) return "correct";
   if (blank.type === "number" && given !== "" && Number(given) === Number(accepted[0])) return "correct";
-  if (given && accepted[0].length >= 5 && editDistance(given, accepted[0]) <= 1) return "near";
+  if (accepted[0].length >= 5 && editDistance(given, accepted[0]) <= 1) return "near";
   return "wrong";
 }
 

@@ -13,8 +13,10 @@ export function trackComposition() {
     clearTimeout(ime.timer);
     ime.timer = setTimeout(() => (ime.justEnded = false), IME_RELEASE_MS);
   });
-  document.addEventListener("keyup", () => {
-    ime.justEnded = false;
+  // 조합을 끝낸 키(Enter·Tab)를 놓을 때만 푼다. Shift 같은 다른 키를 놓아도 풀리면,
+  // 뒤이어 오는 중복 Enter를 막지 못한다.
+  document.addEventListener("keyup", (event) => {
+    if (event.key === "Enter" || event.key === "Tab") ime.justEnded = false;
   });
 }
 
