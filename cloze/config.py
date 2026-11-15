@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     login_fail_window_s: float = 60.0
     # 업로드 원본·이미지를 두는 폴더(로컬 디스크 저장소). 레포에는 커밋하지 않는다.
     storage_dir: Path = Path("data/storage")
+    # 업로드 한도와 검사 하위 프로세스 제한(신뢰성 설계 2·5절, [가설]).
+    upload_max_bytes: int = 20 * 1024 * 1024
+    upload_max_pages: int = 30
+    upload_probe_timeout_s: float = 5.0
+    upload_probe_memory_mb: int = 256
 
 
 def load_settings() -> Settings:
