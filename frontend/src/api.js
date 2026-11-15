@@ -1,9 +1,13 @@
 // 서버와 주고받는 코드는 이 파일에만 둔다. 화면 코드는 fetch를 직접 부르지 않고 아래 함수만 부른다.
 // 요청·응답 모양은 docs/design/data-contract.md 2절(API)과 3절(오류 형식)을 따른다.
-import * as mock from "./mock/server.js";
 
-// 원터치 스위치: 실제 서버에 연결할 때 false로 바꾼다. Mock도 같은 request()를 거쳐 응답 모양과 오류 처리가 같다.
-export const isMock = true;
+// Mock 여부. 개발 서버(npm run dev)는 Mock, 빌드(npm run build)는 실제 서버가 기본이다.
+// 코드에 박아 두면 바꾸기를 잊은 채 빌드한 dist/에서도 Mock이 돈다. 바꾸려면 VITE_API_MOCK=1(켜기)·0(끄기).
+// Mock도 같은 request()를 거쳐 응답 모양과 오류 처리가 같다.
+const mockEnv = import.meta.env.VITE_API_MOCK;
+export const isMock = mockEnv === undefined ? import.meta.env.DEV : mockEnv === "1";
+// Mock이 아니면 불러오지 않아, 운영 빌드에는 mock/server.js가 들어가지 않는다.
+const mock = isMock ? await import("./mock/server.js") : null;
 /** Mock일 때 주소에 ?set= 이 없으면 여는 연습용 세트. 실제 서버에서는 없다. */
 export const demoSetId = isMock ? mock.DEMO_SET_ID : null;
 

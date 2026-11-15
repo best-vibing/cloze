@@ -22,6 +22,8 @@
 
   onMount(() => {
     let timer;
+    // 요청을 기다리는 동안 화면이 사라지면, 응답이 온 뒤 타이머를 다시 걸지 않는다.
+    let stopped = false;
     async function poll() {
       try {
         blankSet = await getBlankSet(setId);
@@ -32,28 +34,37 @@
         problem = e instanceof ApiError ? e.message : "연결에 문제가 있어요. 잠시 후 다시 시도해 주세요.";
         if (e instanceof ApiError && e.status < 500) return; // 401·404는 다시 물어봐도 같다
       }
-      timer = setTimeout(poll, POLL_MS);
+      if (!stopped) timer = setTimeout(poll, POLL_MS);
     }
     if (setId) poll();
     else problem = "열 빈칸 세트가 없어요. 주소에 ?set=세트ID 를 붙여 주세요.";
-    return () => clearTimeout(timer);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
   });
 </script>
 
 <main>
   <h1>Cloze</h1>
-  {#if problem}
-    <p class="problem" role="alert">{problem}</p>
-  {/if}
+  <!-- 실시간 영역은 글자가 바뀌기 전부터 DOM에 있어야 낭독된다. 비면 :empty로 숨긴다. -->
+  <p class="problem" role="alert">{problem}</p>
   {#if blankSet}
     <section aria-live="polite">
       <p><strong>{LABEL[blankSet.status] ?? blankSet.status}</strong></p>
       <progress max={blankSet.progress.total} value={blankSet.progress.done}></progress>
-      <span>{blankSet.progress.done} / {blankSet.progress.total}쪽</span>
+      <span>처리 {blankSet.progress.done} / {blankSet.progress.total}쪽</span>
       {#if blankSet.preset_reason}<p>{blankSet.preset_reason}</p>{/if}
       {#if blankSet.error}<p class="problem">{blankSet.error.message}</p>{/if}
       {#if finished && !blankSet.error}
-        <p>{blankSet.pages.length}쪽, 빈칸 {blankCount}개를 받았어요.</p>
+        <!-- progress는 처리를 시도한 쪽, pages는 풀 수 있는 쪽이라 partial이면 둘이 다르다(계약 2절). -->
+        {#if blankSet.status === "partial"}
+          <p>
+            {blankSet.progress.total}쪽 중 {blankSet.pages.length}쪽만 만들었어요. 빈칸 {blankCount}개를 받았어요.
+          </p>
+        {:else}
+          <p>{blankSet.pages.length}쪽, 빈칸 {blankCount}개를 받았어요.</p>
+        {/if}
       {/if}
     </section>
   {:else if !problem}
@@ -74,5 +85,8 @@
   }
   .problem {
     color: #b91c1c;
+  }
+  .problem:empty {
+    display: none;
   }
 </style>
