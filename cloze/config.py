@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     samples_dir: Path | None = None
     # 기본값은 로컬 개발용(docker-compose.yml의 postgres). 운영 주소는 .env로 넣는다.
     database_url: SecretStr = SecretStr("postgresql+psycopg://cloze:cloze@localhost:5432/cloze")
+    # 서비스 주소. 상태를 바꾸는 요청은 Origin 헤더가 이 값일 때만 받는다(CSRF 방어).
+    public_origin: str = "http://localhost:8000"
+    # 웹 페이지(정적 파일) 폴더. 없으면 API만 띄운다.
+    static_dir: Path = Path("frontend")
 
 
 def load_settings() -> Settings:
