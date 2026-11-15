@@ -7,6 +7,7 @@
 //   failed        queued → running → failed (unreadable_pdf)
 //   unauthorized  로그인 전 상태. 로그인 외 모든 요청이 401 unauthorized
 // 처리 중(queued·running)인 세트에 답안을 내면 어느 시나리오든 409 not_ready다.
+// 같은 PDF를 다시 올렸을 때 기존 document_id를 돌려주는 것(계약 2절 POST /documents)은 흉내 내지 않는다.
 
 export const DEMO_SET_ID = "6f1c2a4e-0000-4000-8000-000000000001";
 const DEMO_DOCUMENT_ID = "0d0c0000-0000-4000-8000-000000000001";
@@ -36,7 +37,7 @@ const state = {
   sets: new Map([[DEMO_SET_ID, newSet(DEMO_DOCUMENT_ID, "auto")]]),
   documents: new Map([[DEMO_DOCUMENT_ID, { filename: "세포생물학-3주차.pdf", sets: [DEMO_SET_ID] }]]),
   attempts: new Map(), // attempt_id → {set_id, submitted_at, score, after_reveal, revealed_at}
-  idempotency: new Map(), // Idempotency-Key → 처음 돌려준 응답
+  idempotency: new Map(), // "경로 키" → {fingerprint: 요청 내용, response: 처음 돌려준 응답}
 };
 
 const ROUTES = [
@@ -89,28 +90,36 @@ function listDocuments() {
 }
 
 function uploadDocument(init) {
-  return once(init, () => {
-    const file = init.body.get("file");
-    if (!file?.name?.toLowerCase().endsWith(".pdf")) return error(415, "not_pdf", "PDF 파일만 올릴 수 있어요.");
+  const file = init.body.get("file");
+  const preset = init.body.get("preset") ?? "auto";
+  // 실패한 요청은 키에 남기지 않는다. 남기면 PDF로 바꿔 같은 키로 다시 올려도 계속 415가 나온다.
+  if (!file?.name?.toLowerCase().endsWith(".pdf")) return error(415, "not_pdf", "PDF 파일만 올릴 수 있어요.");
+  // 지문은 Mock이라 파일 이름·크기·방식으로 대신한다(계약의 sha256은 서버 몫).
+  return once(init, "POST /documents", `${file.name}:${file.size}:${preset}`, () => {
     const documentId = crypto.randomUUID();
     const setId = crypto.randomUUID();
-    state.sets.set(setId, newSet(documentId, init.body.get("preset") ?? "auto"));
+    state.sets.set(setId, newSet(documentId, preset));
     state.documents.set(documentId, { filename: file.name, sets: [setId] });
     return reply(202, { document_id: documentId, blank_set_id: setId });
   });
 }
 
 function deleteDocument(_init, documentId) {
-  if (!state.documents.delete(documentId)) return notFound();
+  const doc = state.documents.get(documentId);
+  if (!doc) return notFound();
+  // 지운 문서의 세트도 지운다. 계약 2절대로 삭제 뒤에는 세트 조회·답안 제출도 not_found다.
+  for (const setId of doc.sets) state.sets.delete(setId);
+  state.documents.delete(documentId);
   return reply(204);
 }
 
 function remakeBlankSet(init, documentId) {
   const doc = state.documents.get(documentId);
   if (!doc) return notFound();
-  return once(init, () => {
+  const preset = JSON.parse(init.body).preset ?? "auto";
+  return once(init, `POST /documents/${documentId}/blank-sets`, preset, () => {
     const setId = crypto.randomUUID();
-    state.sets.set(setId, newSet(documentId, JSON.parse(init.body).preset ?? "auto"));
+    state.sets.set(setId, newSet(documentId, preset));
     doc.sets.push(setId);
     return reply(202, { blank_set_id: setId });
   });
@@ -236,12 +245,20 @@ function same(given, answer) {
   return norm(given) !== "" && norm(given) === norm(answer);
 }
 
-/** 같은 Idempotency-Key로 다시 오면 새로 만들지 않고 처음 응답을 그대로 돌려준다(계약 2절). */
-function once(init, create) {
+/**
+ * 같은 경로에 같은 Idempotency-Key로 다시 오면 새로 만들지 않고 처음 응답을 그대로 돌려준다.
+ * 같은 키에 다른 내용(fingerprint)이 오면 invalid_request로 거절한다(계약 2절 "중복 요청 방지").
+ */
+function once(init, route, fingerprint, create) {
   const key = init.headers["Idempotency-Key"];
   if (!key) return error(422, "invalid_request", "요청에 Idempotency-Key가 없어요.");
-  if (!state.idempotency.has(key)) state.idempotency.set(key, create());
-  return state.idempotency.get(key).clone();
+  const slot = `${route} ${key}`;
+  const seen = state.idempotency.get(slot);
+  if (seen && seen.fingerprint !== fingerprint) {
+    return error(422, "invalid_request", "같은 키로 다른 내용을 보냈어요.");
+  }
+  if (!seen) state.idempotency.set(slot, { fingerprint, response: create() });
+  return state.idempotency.get(slot).response.clone();
 }
 
 function reply(status, body) {
