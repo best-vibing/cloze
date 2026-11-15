@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     public_origin: str = "http://localhost:8000"
     # 웹 페이지(정적 파일) 폴더. 없으면 API만 띄운다.
     static_dir: Path = Path("frontend")
+    # 세션 쿠키 서명 키. 기본값을 두지 않는다: 없으면 API 앱이 뜨지 않는다(create_app).
+    # 워커·alembic은 쓰지 않으므로 여기서는 필수로 두지 않는다.
+    session_secret: SecretStr | None = None
+    # 쿠키 Secure 속성. https가 아닌 로컬 개발에서만 끈다(데이터 계약 2절 COOKIE_SECURE).
+    cookie_secure: bool = True
+    # 로그인 실패 한도: 같은 아이디로 창 안에 이만큼 틀리면 막는다(신뢰성 설계 5절, [가설]).
+    login_fail_limit: int = 5
+    login_fail_window_s: float = 60.0
 
 
 def load_settings() -> Settings:
