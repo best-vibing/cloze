@@ -14,3 +14,6 @@ samples/
 out/
 *.pdf
 !tests/fixtures/*.pdf
+
+# 로컬 파일 저장소(업로드 원본·이미지)
+data/
