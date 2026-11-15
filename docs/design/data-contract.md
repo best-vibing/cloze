@@ -132,7 +132,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 }
 ```
 
-**인증:** 웹 페이지와 `POST /auth/login` 외의 모든 API와 `/images`는 세션 쿠키가 필요하다(없으면 `unauthorized`). 서버는 요청마다 사용자가 존재하고 쿠키의 `session_version`이 맞는지 확인한다. 상태를 바꾸는 요청은 `Origin`이 자기 주소일 때만 받는다(CSRF 방어). 쿠키의 Secure 속성은 설정 `COOKIE_SECURE`(기본 켬)로 로컬 개발에서만 끌 수 있다.
+**인증:** 웹 페이지와 `POST /auth/login` 외의 모든 API와 `/images`는 세션 쿠키가 필요하다(없으면 `unauthorized`). 서버는 요청마다 사용자가 존재하고 쿠키의 `session_version`이 맞는지 확인한다. 상태를 바꾸는 요청은 `Origin`이 자기 주소(설정 `CLOZE_PUBLIC_ORIGIN`)일 때만 받는다(CSRF 방어). 헤더가 없거나 다르면 `forbidden_origin`. 쿠키의 Secure 속성은 설정 `COOKIE_SECURE`(기본 켬)로 로컬 개발에서만 끌 수 있다.
 
 **계정 관리:** API가 아니라 CLI로 한다. 가입 엔드포인트는 없다(ADR-007). `create-user`(아이디·비밀번호·표시 이름), `set-password`(비밀번호 재설정, `session_version`을 올려 기존 세션을 끊음), `delete-user`(그 사용자의 문서에 삭제 표시 → 정리 작업이 실제 삭제, 세션도 바로 끊김).
 
@@ -166,6 +166,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 |---|---|---|
 | `unauthorized` | 401 | 로그인하지 않음 |
 | `invalid_credentials` | 401 | 아이디 또는 비밀번호가 틀림(어느 쪽이 틀렸는지 알려 주지 않는다) |
+| `forbidden_origin` | 403 | 상태를 바꾸는 요청의 `Origin`이 없거나 서비스 주소가 아님(CSRF 방어) |
 | `not_found` | 404 | 없는 리소스, **또는 남의 리소스**(존재 여부를 숨긴다, ADR-006) |
 | `not_ready` | 409 | 아직 처리 중인 세트에 답안 제출 |
 | `file_too_large` | 413 | 파일 크기 상한 초과 |
