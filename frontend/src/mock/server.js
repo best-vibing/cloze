@@ -132,7 +132,7 @@ function getBlankSet(_init, setId) {
     pages: [],
   };
   if (status === "done") body.pages = PAGES;
-  // [가정] partial에서 실패한 쪽은 pages에 넣지 않는다. 표시 방법은 팀 회의에서 정한다.
+  // partial에서 실패한 쪽은 pages에 넣지 않는다(계약 2절 GET /blank-sets/{id}, #93).
   if (status === "partial") body.pages = PAGES.slice(0, 1);
   if (status === "failed") {
     body.error = { code: "unreadable_pdf", message: "인식이 잘 안 됐어요, 다시 올려 주세요." };
