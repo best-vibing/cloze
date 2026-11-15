@@ -16,6 +16,8 @@ dependencies = [
     "pypdfium2>=5.14",
     "sqlalchemy[asyncio]>=2.1.8",
     "uvicorn>=0.54.0",
+    "taskiq>=0.13.0",
+    "taskiq-redis>=1.2.4",
 ]
 
 [dependency-groups]
