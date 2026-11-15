@@ -20,6 +20,9 @@ NEAR_MIN_LEN = 5  # [가설] 정답이 이 길이 이상일 때만 near를 준�
 NEAR_MAX_DISTANCE = 1  # [가설] near로 볼 최대 편집 거리.
 
 _SPACES = re.compile(r"\s+")
+# PDF에서 뽑은 정답에는 키보드의 "-" 대신 빼기·붙임표 기호가 자주 들어간다.
+# NFKC는 이들을 "-"로 바꾸지 않으므로 직접 바꾼다. 차례로 빼기, 붙임표 둘, 숫자 대시, 반각 대시.
+_DASHES = str.maketrans(dict.fromkeys("\u2212\u2010\u2011\u2012\u2013", "-"))
 
 
 @dataclass(frozen=True)
@@ -53,7 +56,7 @@ class Grading:
 
 
 def normalize(text: str) -> str:
-    """비교용으로 글자를 다듬는다. NFKC, 대소문자 무시, 공백 정리, 문장부호 제거.
+    """비교용으로 글자를 다듬는다. NFKC, 빼기 기호 통일, 대소문자 무시, 공백 정리, 문장부호 제거.
 
     숫자에 붙은 부호는 남긴다. 숫자 사이(``3.14`` 의 점, ``1,665`` 의 쉼표)와
     숫자 앞의 ``-``·``.``(``-273``, ``.5``)다. 지우면 ``31.4`` 와 ``3.14``, ``-273`` 과
@@ -66,8 +69,10 @@ def normalize(text: str) -> str:
         '3.14'
         >>> normalize("-273")
         '-273'
+        >>> normalize("−273")
+        '-273'
     """
-    text = unicodedata.normalize("NFKC", text).casefold()
+    text = unicodedata.normalize("NFKC", text).translate(_DASHES).casefold()
     kept = [ch for i, ch in enumerate(text) if not _is_dropped_punct(text, i)]
     return _SPACES.sub(" ", "".join(kept)).strip()
 
@@ -148,9 +153,15 @@ def judge(given: str, key: AnswerKey) -> Verdict:
         'near'
         >>> judge("", AnswerKey("ATP"))
         'wrong'
+        >>> judge("900000", AnswerKey("100000", type="number"))
+        'wrong'
     """
     if is_correct(given, key):
         return "correct"
+    # 숫자는 한 자리만 달라도 다른 값이라 near를 주지 않는다. near는 정답만 보고 변형은 보지 않는다
+    # (변형 수가 칸마다 달라 near가 들쭉날쭉해진다. 설계 1.1 4단계).
+    if key.type == "number":
+        return "wrong"
     g, e = normalize(given), normalize(key.answer)
     if g and len(e) >= NEAR_MIN_LEN and edit_distance(g, e) <= NEAR_MAX_DISTANCE:
         return "near"
@@ -203,7 +214,9 @@ def _match_group(
     Returns:
         list[str]: 짝을 찾아 ``correct`` 가 되는 칸 id.
     """
-    # fits[칸] = 그 칸의 입력이 맞는 정답 칸들. 자기 칸이 있으면 맨 앞에 둔다.
+    # fits[칸] = 그 칸의 입력이 맞는 정답 칸들(members 순서).
+    # 자기 칸에서 맞은 칸을 먼저 짝짓는 것은 아래 sorted가 한다. 이 순서가 없으면 이미 맞은 칸이
+    # 다른 칸에 밀려 점수가 바뀐다(test_answer_group_does_not_reuse_one_answer가 확인).
     fits = {
         bid: [t for t in members if is_correct(answers.get(bid, ""), keys[t])] for bid in members
     }
