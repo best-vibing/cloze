@@ -83,7 +83,8 @@
     {/each}
   </main>
   <footer class="hint">
-    {#if status}<p role="status">{status}</p>{/if}
-    {#if hint}<p role="status">{hint}</p>{/if}
+    <!-- 실시간 영역은 글자가 바뀌기 전부터 DOM에 있어야 낭독된다. 비면 style.css의 .hint p:empty가 숨긴다. -->
+    <p role="status">{status}</p>
+    <p role="status">{hint}</p>
   </footer>
 </div>
