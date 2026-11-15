@@ -6,31 +6,50 @@ import만으로 설정을 읽지 않도록 모듈 수준 app을 두지 않는다
 API 라우터는 정적 파일 마운트보다 먼저 등록한다. 마운트가 "/" 아래를 모두 가져가기 때문이다.
 """
 
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
-from cloze.api import auth, errors
+from cloze.api import auth, documents, errors
 from cloze.config import Settings, load_settings
 from cloze.infra.db import make_engine, make_sessionmaker
+from cloze.infra.storage import LocalStorage
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+type Enqueue = Callable[[uuid.UUID], Awaitable[None]]
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+
+def create_app(settings: Settings | None = None, enqueue: Enqueue | None = None) -> FastAPI:
+    """enqueue를 넘기면 Redis 대신 그것으로 작업을 등록한다(테스트용. CI에는 Redis가 없다)."""
     settings = settings or load_settings()
     if settings.session_secret is None:
         raise RuntimeError("CLOZE_SESSION_SECRET이 없다. .env.example을 보고 넣는다.")
     engine = make_engine(settings)  # 연결은 첫 요청 때 맺는다
+    use_broker = enqueue is None
+
+    async def enqueue_with_broker(set_id: uuid.UUID) -> None:
+        from cloze.worker import process_set
+
+        await process_set.kiq(str(set_id))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        await engine.dispose()
+        async with AsyncExitStack() as stack:
+            stack.push_async_callback(engine.dispose)
+            if use_broker:
+                from cloze.worker import broker
+
+                await broker.startup()
+                stack.push_async_callback(broker.shutdown)
+            yield
 
     app = FastAPI(title="cloze", lifespan=lifespan)
+    app.state.enqueue = enqueue or enqueue_with_broker
+    app.state.storage = LocalStorage(settings.storage_dir)
     app.state.settings = settings
     app.state.session_secret = settings.session_secret.get_secret_value().encode()
     app.state.sessions = make_sessionmaker(engine)
@@ -52,6 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # 라우터는 여기에 추가한다(마운트보다 앞).
     app.include_router(auth.router)
+    app.include_router(documents.router)
 
     if settings.static_dir.is_dir():
         app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="frontend")

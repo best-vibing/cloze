@@ -20,7 +20,7 @@ broker = RedisStreamBroker(
 # 이름을 고정한다. 기본 이름은 모듈 경로라 파일을 옮기면 바뀌고, 큐에 남은 옛 이름의 작업은
 # 워커가 모르는 작업으로 ack되어 사라진다(재배달 실험에서 확인).
 @broker.task(task_name="process_set", timeout=_settings.task_timeout_s, retry_on_error=True)
-async def process_set(set_id: int) -> None:
-    # 빈 작업. 실제 파이프라인은 D6에서 넣는다.
-    logger.info("세트 %d 받음", set_id)
-    logger.info("세트 %d 끝", set_id)
+async def process_set(set_id: str) -> None:
+    # 세트 ID는 UUID 문자열이다(ADR-006). 빈 작업. 실제 파이프라인은 #52에서 넣는다.
+    logger.info("세트 %s 받음", set_id)
+    logger.info("세트 %s 끝", set_id)

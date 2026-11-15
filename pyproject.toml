@@ -18,6 +18,7 @@ dependencies = [
     "uvicorn>=0.54.0",
     "taskiq>=0.13.0",
     "taskiq-redis>=1.2.4",
+    "python-multipart>=0.0.33",
 ]
 
 [dependency-groups]

@@ -59,9 +59,13 @@ def login_id() -> str:
     return login_id
 
 
+async def _no_queue(_: uuid.UUID) -> None:
+    pass  # 이 테스트는 작업 등록을 쓰지 않는다. 넘기지 않으면 lifespan이 Redis 브로커를 띄운다
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[TestClient]:
-    app = create_app(_settings(tmp_path))
+    app = create_app(_settings(tmp_path), enqueue=_no_queue)
 
     @app.get("/whoami")
     async def whoami(user: Annotated[UserRow, Depends(current_user)]) -> str:
