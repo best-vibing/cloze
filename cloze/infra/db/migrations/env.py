@@ -9,6 +9,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+import cloze.infra.db.documents  # noqa: F401
 import cloze.infra.db.users  # noqa: F401  테이블 모듈을 불러와야 Base.metadata에 등록된다(#82)
 from cloze.config import load_settings
 from cloze.infra.db import Base

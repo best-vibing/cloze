@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     # 로그인 실패 한도: 같은 아이디로 창 안에 이만큼 틀리면 막는다(신뢰성 설계 5절, [가설]).
     login_fail_limit: int = 5
     login_fail_window_s: float = 60.0
+    # 업로드 원본·이미지를 두는 폴더(로컬 디스크 저장소). 레포에는 커밋하지 않는다.
+    storage_dir: Path = Path("data/storage")
 
 
 def load_settings() -> Settings:

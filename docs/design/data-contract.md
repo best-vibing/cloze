@@ -193,7 +193,7 @@ users 1─N documents 1─N blank_sets 1─N blanks
 | 테이블 | 주요 필드 | 메모 |
 |---|---|---|
 | `users` | id, login_id(고유), password_hash, display_name, session_version, created_at | 계정은 팀이 CLI로 만든다. 비밀번호는 솔트를 붙인 느린 해시(scrypt 또는 Argon2)로만 저장한다. Google 로그인이 붙으면 외부 식별자 필드를 더한다 |
-| `documents` | id, owner_id, sha256, 파일명, page_count, 원본 키, created_at, expires_at, deleted_at | `(owner_id, sha256)` 고유는 **삭제 표시가 없는 행에만** 적용한다(부분 고유 인덱스 `WHERE deleted_at IS NULL`). 삭제한 뒤 같은 PDF를 올리면 새 문서가 된다. 처리 상태 필드 없음(업로드 검사는 요청 안에서 끝난다) |
+| `documents` | id, owner_id, sha256, filename, page_count, size_bytes, source_key, created_at, expires_at, deleted_at | `(owner_id, sha256)` 고유는 **삭제 표시가 없는 행에만** 적용한다(부분 고유 인덱스 `WHERE deleted_at IS NULL`). 삭제한 뒤 같은 PDF를 올리면 새 문서가 된다. 같은 PDF가 거의 동시에 두 번 오면 늦은 쪽이 자기 파일을 지우고 먼저 들어간 문서를 쓴다. 원본은 파일 저장소의 `documents/{id}/source.pdf`(`source_key`)에 두고, 사용자가 붙인 `filename`은 경로에 쓰지 않는다. `size_bytes`는 사용자별 저장 용량 한도용(#28). 처리 상태 필드 없음(업로드 검사는 요청 안에서 끝난다) |
 | `pages` | (document_id, page_no, extract_version), 크기(pt), source, 원본 이미지 키, 토큰 JSON 키 | 같은 추출 버전이면 세트끼리 재사용 |
 | `blank_sets` | id(= 작업 ID), document_id, requested_by, idempotency_key, request_hash, preset_requested, preset_applied, analysis, seed, model, prompt_version, extract_version, status, progress, run_count, error_code, error_message, created_at, updated_at, finished_at | 상태의 유일한 기준. `(requested_by, idempotency_key)` 고유. `prompt_version`·`extract_version`은 기록용. `run_count`는 실행 횟수, `updated_at`은 진행할 때마다 갱신 |
 | `blank_set_pages` | (set_id, page_no), 가린 이미지 키, selection_source, quality | 가린 이미지는 세트마다 다르다. 이 행이 있으면 그 페이지는 처리가 끝난 것(재실행 시 건너뜀) |
