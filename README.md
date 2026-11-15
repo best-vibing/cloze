@@ -72,6 +72,7 @@ uv run taskiq worker cloze.worker:broker --max-async-tasks 1  # 워커
 ```
 
 - `--max-async-tasks 1`: 워커 프로세스 하나가 작업을 하나씩만 처리한다([신뢰성 설계 5절](docs/design/reliability.md#5-한도)). taskiq 기본값은 100이라, 빠뜨리면 한 프로세스가 PDF 여러 개를 동시에 메모리에 올리고 Gemini 동시 호출 상한도 나눠 쓴다.
+- 브로커도 Redis에서 하나씩만 가져온다(`xread_count=1`, `unacknowledged_batch_size=1`, `cloze/worker/__init__.py`). 기본값 100이면 쌓인 작업이 한 워커의 대기 목록(PEL)으로 한꺼번에 넘어가, 시작도 안 한 작업의 idle 시계가 돈다. 확인: 작업 3개를 먼저 넣고 워커를 띄운 뒤 `docker exec <redis 컨테이너> redis-cli XPENDING taskiq taskiq`가 1이어야 한다(기본값이면 3).
 
 - 작업 제한 시간(`CLOZE_TASK_TIMEOUT_S`)은 `CLOZE_QUEUE_IDLE_TIMEOUT_MS`보다 짧아야 한다. 어기면 설정을 읽을 때 실패한다([신뢰성 설계 2절](docs/design/reliability.md#2-시간-설정-초기값)).
 - 처리 중에 죽은 워커의 작업은 `idle_timeout`이 지난 **뒤 새 작업이 하나 들어올 때** 다른 워커가 넘겨받는다. 새 작업이 없으면 넘겨받지 않는다(PR의 재배달 실험).
