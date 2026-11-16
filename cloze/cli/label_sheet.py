@@ -189,7 +189,7 @@ def _check(path: Path) -> None:
     problems = check_rows(records)
     for problem in problems:
         print(problem, file=sys.stderr)
-    counts = Counter(record.get("label", "") for record in records)
+    counts = Counter((record.get("label") or "").strip() for record in records)
     summary = ", ".join(f"{label} {counts[label]}" for label in LABELS)
     print(f"{len(records)}칸: {summary}, 빈 칸 {counts['']}")
     if problems:
@@ -202,8 +202,15 @@ def check_rows(records: list[dict[str, str]]) -> list[str]:
         return ["label·labeler 열이 없다"]
     problems: list[str] = []
     for line, record in enumerate(records, start=2):
-        label = record["label"].strip()
-        if label and label not in LABELS:
+        # DictReader는 모자란 칸을 None, 남는 칸을 키 None의 리스트로 채운다.
+        if not all(isinstance(value, str) for value in record.values()):
+            problems.append(f"{line}줄: 열 수가 머리글과 다르다")
+            continue
+        # 보정 계산(parse_label_csv)은 label을 strip하지 않고 그대로 비교한다.
+        label = record["label"]
+        if label != label.strip():
+            problems.append(f"{line}줄: label '{label}' 앞뒤에 공백이 있다")
+        elif label and label not in LABELS:
             problems.append(f"{line}줄: label '{label}'은 {' / '.join(LABELS)} 중 하나가 아니다")
         if label and not record["labeler"].strip():
             problems.append(f"{line}줄: labeler가 비어 있다")

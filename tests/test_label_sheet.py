@@ -97,3 +97,30 @@ def test_check_reports_unknown_label_and_missing_labeler() -> None:
         "2줄: label '보통'은 좋음 / 애매 / 나쁨 중 하나가 아니다",
         "3줄: labeler가 비어 있다",
     ]
+
+
+def _check_file(tmp_path: Path, text: str) -> None:
+    (tmp_path / "sheet.csv").write_text(text, encoding="utf-8-sig")
+    main(["check", str(tmp_path / "sheet.csv")])
+
+
+def test_check_reports_label_with_spaces(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        _check_file(tmp_path, "label,labeler\n좋음 ,a\n좋음,a\n")
+    assert exc.value.code == 1
+    out, err = capsys.readouterr()
+    assert err == "2줄: label '좋음 ' 앞뒤에 공백이 있다\n"
+    assert out == "2칸: 좋음 2, 애매 0, 나쁨 0, 빈 칸 0\n"
+
+
+def test_check_reports_rows_with_wrong_column_count(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        _check_file(tmp_path, "label,labeler\n좋음\n좋음,a,b\n좋음,a\n")
+    assert capsys.readouterr().err.splitlines() == [
+        "2줄: 열 수가 머리글과 다르다",
+        "3줄: 열 수가 머리글과 다르다",
+    ]
