@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # 웹 페이지 빌드 결과 폴더. frontend/ 는 빌드 전 소스라 내보내지 않는다.
     # 없으면 API만 띄운다.
     static_dir: Path = Path("frontend/dist")
+    # 업로드 한도와 검사 하위 프로세스 제한(신뢰성 설계 2·5절, [가설]).
+    upload_max_bytes: int = 20 * 1024 * 1024
+    upload_max_pages: int = 30
+    upload_probe_timeout_s: float = 5.0
+    upload_probe_memory_mb: int = 256
 
 
 def load_settings() -> Settings:
