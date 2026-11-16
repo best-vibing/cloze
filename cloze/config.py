@@ -18,8 +18,9 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr("postgresql+psycopg://cloze:cloze@localhost:5432/cloze")
     # 서비스 주소. 상태를 바꾸는 요청은 Origin 헤더가 이 값일 때만 받는다(CSRF 방어).
     public_origin: str = "http://localhost:8000"
-    # 웹 페이지(정적 파일) 폴더. 없으면 API만 띄운다.
-    static_dir: Path = Path("frontend")
+    # 웹 페이지 빌드 결과 폴더. frontend/ 는 빌드 전 소스라 내보내지 않는다.
+    # 없으면 API만 띄운다.
+    static_dir: Path = Path("frontend/dist")
     # 세션 쿠키 서명 키. 기본값을 두지 않는다: 없으면 API 앱이 뜨지 않는다(create_app).
     # 워커·alembic은 쓰지 않으므로 여기서는 필수로 두지 않는다.
     session_secret: SecretStr | None = None
