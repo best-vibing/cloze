@@ -26,8 +26,9 @@ type Enqueue = Callable[[uuid.UUID], Awaitable[None]]
 def create_app(settings: Settings | None = None, enqueue: Enqueue | None = None) -> FastAPI:
     """enqueue를 넘기면 Redis 대신 그것으로 작업을 등록한다(테스트용. CI에는 Redis가 없다)."""
     settings = settings or load_settings()
-    if settings.session_secret is None:
-        raise RuntimeError("CLOZE_SESSION_SECRET이 없다. .env.example을 보고 넣는다.")
+    # 짧거나 빈 키, 문서에 적힌 예시 값으로는 누구나 세션 쿠키를 위조할 수 있다.
+    if settings.session_secret is None or len(settings.session_secret.get_secret_value()) < 32:
+        raise RuntimeError("CLOZE_SESSION_SECRET이 없거나 32자보다 짧다. .env.example을 본다.")
     engine = make_engine(settings)  # 연결은 첫 요청 때 맺는다
     use_broker = enqueue is None
 

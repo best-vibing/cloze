@@ -17,7 +17,7 @@ from functools import cache
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cloze.api.deps import db_session
@@ -42,7 +42,8 @@ def sign(payload: dict[str, Any], secret: bytes) -> str:
 def unsign(token: str, secret: bytes) -> dict[str, Any] | None:
     body, _, mac = token.rpartition(".")
     expected = hmac.new(secret, body.encode(), hashlib.sha256).hexdigest()
-    if not body or not hmac.compare_digest(mac, expected):
+    # str끼리 비교하면 비ASCII 글자가 섞인 쿠키에서 TypeError(500)가 난다. 바이트로 비교한다.
+    if not body or not hmac.compare_digest(mac.encode(), expected.encode()):
         return None
     payload: dict[str, Any] = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
     return payload
@@ -51,9 +52,10 @@ def unsign(token: str, secret: bytes) -> dict[str, Any] | None:
 class LoginLimiter:
     """아이디별 최근 실패 시각. 인스턴스가 하나라 프로세스 메모리로 충분하다(신뢰성 설계 5절)."""
 
-    def __init__(self, limit: int, window_s: float) -> None:
+    def __init__(self, limit: int, window_s: float, max_keys: int = 10_000) -> None:
         self.limit = limit
         self.window_s = window_s
+        self.max_keys = max_keys
         self._fails: defaultdict[str, deque[float]] = defaultdict(deque)
 
     def blocked(self, key: str, now: float) -> bool:
@@ -61,11 +63,17 @@ class LoginLimiter:
         while fails and now - fails[0] > self.window_s:
             fails.popleft()
         if not fails:
-            del self._fails[key]  # 없는 아이디를 계속 넣어도 메모리가 쌓이지 않게
+            del self._fails[key]  # 위 조회가 만든 빈 기록은 남기지 않는다
             return False
         return len(fails) >= self.limit
 
     def fail(self, key: str, now: float) -> None:
+        # 기록은 같은 아이디로 다시 올 때만 지워진다. 매번 다른 아이디로 실패를 보내도
+        # 메모리가 끝없이 늘지 않게 아이디 수에 상한을 두고, 가장 먼저 들어온 것부터 버린다.
+        # ponytail: 상한을 넘기는 공격 중에는 다른 아이디의 기록이 밀려 지워진다.
+        # 막아야 하면 IP별 한도를 더한다.
+        if key not in self._fails and len(self._fails) >= self.max_keys:
+            del self._fails[next(iter(self._fails))]
         self._fails[key].append(now)
 
     def reset(self, key: str) -> None:
@@ -105,8 +113,10 @@ async def current_user(request: Request, db: Db) -> UserRow:
 
 
 class LoginBody(BaseModel):
-    login_id: str
-    password: str
+    # 아주 긴 값이 DB 조회·실패 기록·scrypt에 그대로 들어가지 않게 한다.
+    # 넘으면 422 invalid_request.
+    login_id: str = Field(max_length=64)
+    password: str = Field(max_length=256)
 
 
 @router.post("/auth/login", status_code=204)

@@ -19,7 +19,7 @@ from cloze.infra.db import make_engine, make_sessionmaker
 from cloze.infra.db.users import UserRow, create_user, set_password
 
 ORIGIN = "http://testserver"
-SECRET = "test-secret"
+SECRET = "test-secret-" + "x" * 32
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -92,11 +92,21 @@ def test_sign_round_trip_and_tamper() -> None:
     assert unsign(token, b"k") == {"uid": "u", "ver": 0, "exp": 1}
     assert unsign(token, b"other") is None
     assert unsign(token[:-1] + ("0" if token[-1] != "0" else "1"), b"k") is None
+    assert unsign("abc.éé", b"k") is None  # 비ASCII 서명도 500이 아니라 거절
 
 
-def test_app_needs_session_secret(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError):
-        create_app(Settings(static_dir=tmp_path))
+def test_app_needs_long_session_secret(tmp_path: Path) -> None:
+    for secret in (None, SecretStr(""), SecretStr("dev-only-change-me")):
+        with pytest.raises(RuntimeError):
+            create_app(Settings(static_dir=tmp_path, session_secret=secret))
+
+
+def test_too_long_login_fields_are_rejected(client: TestClient) -> None:
+    too_long = [{"login_id": "a" * 65, "password": "pw"}, {"login_id": "a", "password": "p" * 257}]
+    for body in too_long:
+        res = client.post("/auth/login", json=body)
+        assert res.status_code == 422
+        assert res.json()["error"]["code"] == "invalid_request"
 
 
 def test_login_sets_session_cookie(client: TestClient, login_id: str) -> None:
@@ -159,3 +169,11 @@ def test_limiter_window_and_reset() -> None:
     limiter.fail("b", 0)
     limiter.reset("b")
     assert not limiter.blocked("b", 0)
+
+
+def test_limiter_keeps_at_most_max_keys() -> None:
+    limiter = LoginLimiter(limit=5, window_s=60, max_keys=3)
+    for i in range(10):
+        limiter.fail(f"id{i}", 0.0)
+    assert len(limiter._fails) == 3
+    assert not limiter.blocked("id0", 1.0)  # 가장 먼저 들어온 기록부터 버렸다
