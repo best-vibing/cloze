@@ -1,0 +1,80 @@
+:root {
+  --accent: #2563eb;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, "Malgun Gothic", sans-serif;
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+}
+
+.bar h1 { margin: 0; font-size: 1.1rem; }
+.bar small { color: #6b7280; font-weight: normal; }
+
+#pages {
+  display: grid;
+  gap: 16px;
+  padding: 0 16px 16px;
+}
+
+/* 페이지 한 장. 입력칸 좌표와 글자 크기의 기준이 되는 컨테이너다. */
+.page {
+  position: relative;
+  container-type: inline-size;
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.15);
+}
+
+.page img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* 빈칸 입력칸. left/top/height는 퍼센트, 폭과 글자 크기는 cqw라 창 크기가 바뀌어도 비율이 같다. */
+.blank {
+  position: absolute;
+  margin: 0;
+  padding: 0 0.15em;
+  border: 0;
+  border-bottom: 1px dashed rgb(0 0 0 / 0.25);
+  font-family: inherit;
+  font-size: calc(var(--font-ratio) * 100cqw);
+  line-height: 1;
+  color: var(--font-color);
+  background: var(--bg-color);
+  outline: none;
+}
+
+.blank:focus {
+  z-index: 1;
+  border-bottom-color: var(--accent);
+  box-shadow: -3px 0 0 var(--accent), 0 2px 8px rgb(0 0 0 / 0.25);
+}
+
+.debug .blank { outline: 1px solid rgb(255 0 0 / 0.6); }
+
+.hint {
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  min-height: 2em;
+  padding: 6px 16px;
+  background: #fff;
+  border-top: 1px solid #e5e7eb;
+  font-size: 0.9rem;
+}
