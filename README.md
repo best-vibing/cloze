@@ -60,8 +60,7 @@ uv run python -m cloze.cli.accounts create-user <아이디> --display-name <이�
 - `.env`에 `CLOZE_SESSION_SECRET`(32자 이상)이 없으면 서버가 뜨지 않는다. 로컬도 `.env.example`에 적힌 명령으로 각자 만들어 넣고, `CLOZE_COOKIE_SECURE=false`로 둔다(http라 Secure 쿠키가 돌아오지 않는다).
 - `--loop asyncio:SelectorEventLoop`: Windows에서 uvicorn은 Proactor 루프를 쓰는데, psycopg 비동기 모드는 이 루프에서 돌지 않는다(DB를 쓰는 요청이 500). Linux에서는 원래 기본값이라 붙여도 같다.
 - 상태를 바꾸는 요청(POST·DELETE 등)은 `Origin` 헤더가 `CLOZE_PUBLIC_ORIGIN`(기본 `http://localhost:8000`)일 때만 받는다. curl로 시험할 때는 `-H "Origin: http://localhost:8000"`을 붙인다.
-
-웹 페이지는 `frontend/`에서 `npm run build`로 만든 `frontend/dist/`를 같은 주소(`/`)로 내보낸다. 빌드 전에는 API만 뜬다.
+- 웹 페이지는 `frontend/`에서 `npm run build`로 만든 `frontend/dist/`를 같은 주소(`/`)로 내보낸다. 빌드 전에는 API만 뜬다.
 
 ### DB (PostgreSQL)
 
