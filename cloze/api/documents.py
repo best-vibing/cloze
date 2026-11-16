@@ -5,6 +5,7 @@
 
 import asyncio
 import hashlib
+import logging
 import secrets
 import uuid
 from typing import Annotated, Literal
@@ -23,6 +24,7 @@ from cloze.infra.db.users import UserRow
 
 Preset = Literal["auto", "vocab", "concept", "number", "definition"]  # core.models.Policy와 같음
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -92,6 +94,11 @@ async def upload_document(
         await db.commit()  # 문서 행은 재사용·새 문서 어느 쪽이든 남겨도 된다
         return _same_request(winner, request_hash)
     await db.commit()
-    # 커밋한 뒤 등록한다. 등록이 실패해 queued로 남은 세트는 정리 작업이 다시 등록한다(ADR-011).
-    await request.app.state.enqueue(blank_set.id)
+    # 커밋한 뒤 등록한다. 등록이 실패해도 세트는 이미 저장됐으니 202로 답한다. 500을 주면
+    # 같은 키로 다시 보내도 저장된 세트만 돌려받고 등록은 다시 하지 않는다.
+    # queued로 남은 세트는 정리 작업이 다시 등록한다(ADR-011).
+    try:
+        await request.app.state.enqueue(blank_set.id)
+    except Exception:
+        logger.exception("작업 등록 실패, 정리 작업이 다시 등록한다: set_id=%s", blank_set.id)
     return UploadResult(document_id=document.id, blank_set_id=blank_set.id)

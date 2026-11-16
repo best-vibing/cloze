@@ -86,7 +86,7 @@ def uploader(tmp_path: Path) -> Iterator[Uploader]:
         public_origin=ORIGIN,
         static_dir=tmp_path / "no-frontend",
         storage_dir=tmp_path / "storage",
-        session_secret=SecretStr("t"),
+        session_secret=SecretStr("t" * 32),
         cookie_secure=False,
     )
     app = create_app(settings, enqueue=enqueue)
@@ -123,6 +123,17 @@ def test_same_key_returns_same_set_without_requeue(uploader: Uploader) -> None:
     assert other.status_code == 422 and other.json()["error"]["code"] == "invalid_request"
 
 
+def test_enqueue_failure_still_answers_202_and_keeps_set_queued(uploader: Uploader) -> None:
+    async def broken(_: uuid.UUID) -> None:
+        raise ConnectionError("redis down")
+
+    uploader.client.app.state.enqueue = broken  # type: ignore[attr-defined]
+    res = uploader.upload(key=_key())
+    assert res.status_code == 202
+    (row,) = _in_loop(_sets(uploader.user_id))
+    assert row.status == "queued" and str(row.id) == res.json()["blank_set_id"]
+
+
 def test_same_pdf_new_key_reuses_document(uploader: Uploader) -> None:
     first = uploader.upload(key=_key()).json()
     second = uploader.upload(key=_key()).json()
@@ -154,7 +165,9 @@ def test_requires_login(tmp_path: Path) -> None:
     async def enqueue(_: uuid.UUID) -> None:
         pass
 
-    settings = Settings(static_dir=tmp_path, session_secret=SecretStr("t"), public_origin=ORIGIN)
+    settings = Settings(
+        static_dir=tmp_path, session_secret=SecretStr("t" * 32), public_origin=ORIGIN
+    )
     client = TestClient(create_app(settings, enqueue=enqueue), headers={"Origin": ORIGIN})
     res = client.post(
         "/documents", files={"file": ("a.pdf", PDF)}, headers={"Idempotency-Key": _key()}
