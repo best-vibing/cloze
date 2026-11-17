@@ -14,3 +14,7 @@ samples/
 out/
 *.pdf
 !tests/fixtures/*.pdf
+
+# 프론트: 내려받은 라이브러리와 빌드 결과
+node_modules/
+frontend/**/dist/
