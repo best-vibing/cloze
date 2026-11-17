@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     samples_dir: Path | None = None
     # 기본값은 로컬 개발용(docker-compose.yml의 postgres). 운영 주소는 .env로 넣는다.
     database_url: SecretStr = SecretStr("postgresql+psycopg://cloze:cloze@localhost:5432/cloze")
+    # 업로드 원본·이미지를 두는 폴더(로컬 디스크 저장소). 레포에는 커밋하지 않는다.
+    storage_dir: Path = Path("data/storage")
 
 
 def load_settings() -> Settings:
