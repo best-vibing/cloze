@@ -1,11 +1,11 @@
-"""tests/fixtures/의 fixture PDF(sample, render, twoup, questions)를 표준 라이브러리만으로 만든다.
+"""tests/fixtures/의 PDF(sample, render, korean, twoup, questions)를 표준 라이브러리로 만든다.
 
 실행: uv run python tests/fixtures/make_fixtures.py
 """
 
 from pathlib import Path
 
-type Run = tuple[str, int, int, int, str]  # 폰트, 크기, x, y, 글
+type Run = tuple[str, int, float, int, str]  # 폰트, 크기, x, y, 글
 
 REGULAR, BOLD, KOREAN = "R", "B", "K"
 FONTS = (
@@ -109,6 +109,54 @@ RENDER_PAGES: list[PageSpec] = [
 
 def _sample_pages() -> list[PageSpec]:
     return [(b"", b"", [*_frame(no), *runs]) for no, runs in enumerate(PAGES, start=1)]
+
+
+# 한국어 강의자료처럼 띄어쓰기를 공백 글자 없이 글자 크기의 0.29배 간격으로만 둔 줄.
+# CID 폰트의 기본 글자 폭이 1em이라 다음 어절의 x는 글자 수 × 크기 + 간격이다.
+KOREAN_GAP_EM = 0.29
+
+
+def _spaced(size: int, y: int, words: list[str]) -> list[Run]:
+    runs: list[Run] = []
+    x = 72.0
+    for word in words:
+        runs.append((KOREAN, size, round(x, 2), y, word))
+        x += len(word) * size + KOREAN_GAP_EM * size
+    return runs
+
+
+KOREAN_LINE = ["인공지능은", "데이터를", "학습한다"]
+
+
+def _korean_runs() -> list[Run]:
+    return [
+        *_spaced(10, 700, KOREAN_LINE),
+        *_spaced(14, 670, ["확률", "변수의", "분포"]),
+        (KOREAN, 10, 72, 640, "역전파는"),  # 어절 안 글자는 간격 0이라 하나로 남는다
+        (REGULAR, 10, 72, 610, "gradient descent uses the learning rate"),
+    ]
+
+
+def _turned(matrix: tuple[int, int, int, int], x: int, y: int, words: list[str]) -> bytes:
+    """글자 행렬(Tm)로 돌린 10pt 한국어 줄. 어절은 글자 방향으로 0.29em씩 띄운다."""
+    a, b, c, d = matrix
+    size, offset, out = 10, 0.0, b""
+    for word in words:
+        tx, ty = round(x + a * offset, 2), round(y + b * offset, 2)
+        shown = word.encode("utf-16-be").hex()
+        out += f"BT /{KOREAN} {size} Tf {a} {b} {c} {d} {tx} {ty} Tm <{shown}> Tj ET\n".encode()
+        offset += len(word) * size + KOREAN_GAP_EM * size
+    return out
+
+
+# 1쪽: 직립 글. 2쪽부터: 같은 줄을 페이지 /Rotate 90, 글자 90·270·180도로 돌린 쪽.
+KOREAN_PAGES: list[PageSpec] = [
+    (b"", b"", _korean_runs()),
+    (b" /Rotate 90", b"", _spaced(10, 700, KOREAN_LINE)),
+    (b"", _turned((0, 1, -1, 0), 300, 200, KOREAN_LINE), []),
+    (b"", _turned((0, -1, 1, 0), 300, 600, KOREAN_LINE), []),
+    (b"", _turned((-1, 0, 0, -1), 400, 400, KOREAN_LINE), []),
+]
 
 
 # 두 장 모아찍기: A4 한 쪽에 슬라이드 두 장. 슬라이드마다 바닥글이 있어 한 쪽에 두 번 나온다.
@@ -260,6 +308,10 @@ def build_render_pdf() -> bytes:
     return _build(RENDER_PAGES)
 
 
+def build_korean_pdf() -> bytes:
+    return _build(KOREAN_PAGES)
+
+
 def build_twoup_pdf() -> bytes:
     return _build(_twoup_pages(TWOUP_SLIDES))
 
@@ -287,5 +339,6 @@ def _build(pages: list[PageSpec]) -> bytes:
 if __name__ == "__main__":
     Path(__file__).with_name("sample.pdf").write_bytes(build_sample_pdf())
     Path(__file__).with_name("render.pdf").write_bytes(build_render_pdf())
+    Path(__file__).with_name("korean.pdf").write_bytes(build_korean_pdf())
     Path(__file__).with_name("twoup.pdf").write_bytes(build_twoup_pdf())
     Path(__file__).with_name("questions.pdf").write_bytes(build_questions_pdf())

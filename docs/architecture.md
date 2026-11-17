@@ -121,6 +121,7 @@ flowchart TB
 |---|---|---|
 | 프로세스 구성 | API 서버와 워커를 같은 패키지에서 프로세스만 분리 | PDF 파서 격리, 긴 작업이 API를 막지 않게. 이 규모에서 마이크로서비스는 불필요 |
 | 작업 큐 | **Taskiq + taskiq-redis `RedisStreamBroker`** | asyncio 기반, ack로 워커가 죽어도 작업이 남음. arq는 유지보수 전용이라 제외 → [ADR-001](decisions/ADR-001-task-queue-taskiq.md) |
+| 작업 재배달 | 재시작한 워커가 자기 대기 목록을 **바로 다시 읽고**, 실행 횟수 상한으로 독 메시지를 끊는다 | 처리 중에 죽은 작업이 15~75분 멈추지 않게. 상한 없이 빠르게만 하면 큰 PDF가 크래시 루프가 됨 → [ADR-013](decisions/ADR-013-fast-redelivery-with-run-limit.md) |
 | 웹 프레임워크 | **FastAPI** | pydantic 계약에서 API 문서 자동 생성, asyncio 기본, 원래 앱 코드 재사용 → [ADR-009](decisions/ADR-009-web-framework-fastapi.md) |
 | LLM | **Gemini API 무료 티어**, 모델은 설정으로 교체 | 비용 0, 한·영과 구조화 출력 지원. 무료 티어 입력은 제품 개선에 쓰임 → [ADR-010](decisions/ADR-010-llm-gemini.md) |
 | 작업 상태의 기준 | **PostgreSQL** | Redis가 재시작돼도 진행 상태·부분 성공 정보가 남아야 함. Redis는 전달만 담당. SQLite 대신 고른 이유 → [ADR-008](decisions/ADR-008-database-postgresql.md) |
@@ -181,7 +182,7 @@ flowchart TB
 ### 3.2 Taskiq 워커
 - 실행: API와 같은 패키지, 별도 컨테이너. 메모리 제한을 건다(PDF 파서 격리).
 - 작업 단위: 빈칸 세트 하나(= 문서 하나 + 정책 하나 + 시드). 작업 ID는 세트 ID다.
-- 동시성: 워커 프로세스 하나가 작업 하나씩 처리한다. PDF 파싱·이미지 처리는 CPU 계산이고 pdfplumber는 순수 파이썬이라 스레드로는 빨라지지 않기 때문이다. 처리량은 워커 컨테이너 수로 늘린다. 작업 안에서 Gemini 응답 대기는 여러 페이지를 동시에 기다린다(3.5).
+- 동시성: 워커 프로세스 하나가 작업 하나씩 처리한다. PDF 파싱·이미지 처리는 CPU 계산이고 pdfplumber는 순수 파이썬이라 스레드로는 빨라지지 않기 때문이다. 처리량은 워커 프로세스 수(`--workers`)로 늘린다(컨테이너를 늘리지 않는 이유 → [ADR-013](decisions/ADR-013-fast-redelivery-with-run-limit.md)). 작업 안에서 Gemini 응답 대기는 여러 페이지를 동시에 기다린다(3.5).
 - 파이프라인 단계는 입력·출력이 명확한 함수로 만들고, 바뀔 수 있는 부분만 어댑터로 뺀다.
 
 | 어댑터 | 현재 구현 | 교체 후보 |
