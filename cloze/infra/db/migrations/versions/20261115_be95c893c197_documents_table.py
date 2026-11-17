@@ -1,7 +1,7 @@
 """documents table
 
 Revision ID: be95c893c197
-Revises: 89e789a9a533
+Revises: 955bf75df275
 Create Date: 2026-11-15 17:03:15.683225
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "be95c893c197"
-down_revision: str | Sequence[str] | None = "89e789a9a533"
+down_revision: str | Sequence[str] | None = "955bf75df275"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
