@@ -20,6 +20,7 @@
 | [상세 설계 — 단어 선택·자료 분석·품질 게이트](docs/design/selection-and-quality-gate.md) | 자동 모드 분석, 품질 게이트 기준과 보정 절차, LLM 출력 검증, 프롬프트 입력 형식, 운영 지표 | LLM·검증 |
 | [상세 설계 — 채점·입력칸 표시](docs/design/grading-and-overlay.md) | 채점 판정 순서, 정답 공개·다시 풀기 기록, 입력칸 글자 크기·색과 입력 규칙 | 서버·워커, 프론트 |
 | [상세 설계 — 신뢰성](docs/design/reliability.md) | 실패 담당, 재시도 층, 시간 설정, 멱등성, 한도 | 서버·워커 |
+| [이슈 해설서](docs/이슈-해설서.md) | 이슈(#12~#61)마다 왜 필요한지·지금 상태·할 일 풀이·확인 방법, 구현 후 부품 사이 데이터 흐름 그림 | 공동 |
 
 ## 문서 규칙
 
@@ -47,5 +48,21 @@ Python 버전과 라이브러리 버전은 팀 전체가 같게 쓴다. `uv`가 
 | `uv run pytest` | 테스트 | 예 |
 
 PR을 올리면 CI(`.github/workflows/ci.yml`)가 위 다섯 가지를 실행한다. 모두 통과해야 머지한다. 의존성을 추가할 때는 `uv add <패키지>`로 넣어 `uv.lock`도 함께 커밋한다.
+
+### DB (PostgreSQL)
+
+[Docker](https://docs.docker.com/get-started/get-docker/)로 내 컴퓨터에 띄운다. 주소는 `config.py` 기본값과 같아서 `.env`에 따로 적지 않아도 된다.
+
+```
+docker compose up -d postgres     # 띄우기 (데이터는 볼륨 pgdata에 남는다)
+uv run alembic upgrade head       # 테이블을 최신 마이그레이션까지 맞추기
+docker compose down               # 끄기 (-v를 붙이면 데이터도 지운다)
+```
+
+- 5432 포트를 이미 다른 PostgreSQL이 쓰고 있으면 `docker-compose.yml`의 왼쪽 포트를 바꾸고, `.env`의 `CLOZE_DATABASE_URL` 주석을 풀어 같은 포트로 고친다.
+- DB가 꺼져 있으면 DB 테스트는 건너뛴다. CI는 PostgreSQL을 함께 띄우므로 건너뛰지 않고, 연결에 실패하면 테스트가 실패한다.
+- 테이블을 추가하거나 바꿀 때는 `uv run alembic revision --autogenerate -m "설명"`으로 파일을 만들고, 생성된 내용을 꼭 읽어 본다(이름 바꾸기를 지우고 새로 만들기로 잘못 읽는 경우가 있다). 마이그레이션은 **추가만** 한다(새 테이블·빈 값 허용 컬럼·인덱스).
+- 테이블은 `cloze/infra/db/<테이블>.py`에 두고, 새 모듈은 `migrations/env.py`에 import를 더한다. 빠뜨리면 autogenerate가 그 테이블을 보지 못하고, `test_alembic_env_imports_every_table_module`이 실패한다.
+- 다른 사람과 동시에 마이그레이션을 만들면 기록이 두 갈래가 되어 CI의 `test_migrations_have_single_head`가 실패한다. 늦게 머지하는 쪽이 `develop`을 합친 뒤 `uv run alembic merge heads -m "merge"`로 합친다.
 
 수업 PDF 같은 기준 자료는 저작권 때문에 레포에 넣지 않는다. 로컬 폴더에 두고 `CLOZE_SAMPLES_DIR`로 가리킨다. 테스트용으로 직접 만든 작은 PDF만 `tests/fixtures/`에 커밋한다.
