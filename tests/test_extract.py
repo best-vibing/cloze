@@ -69,6 +69,32 @@ def test_upright_extraction_matches_select_cli_baseline(pages: list[PageTokens])
     assert [page.model_dump(mode="json", exclude=without) for page in pages] == baseline
 
 
+KOREAN = Path(__file__).parent / "fixtures" / "korean.pdf"
+
+
+def test_korean_words_split_at_gap_without_space_char() -> None:
+    # 띄어쓰기가 공백 글자 없이 0.29em 간격으로만 저장된 줄.
+    # pdfplumber 기본 x_tolerance(3pt)면 10pt 줄의 어절이 붙는다.
+    page = extract_tokens(KOREAN.read_bytes())[0]
+    lines: dict[int, list[str]] = {}
+    for token in page.tokens:
+        lines.setdefault(token.line_id, []).append(token.text)
+    assert lines[0] == ["인공지능은", "데이터를", "학습한다"]
+    assert lines[1] == ["확률", "변수의", "분포"]
+    assert lines[2] == ["역전파는"]  # 어절 안 글자(간격 0)는 나뉘지 않는다
+    assert lines[3] == ["gradient", "descent", "uses", "the", "learning", "rate"]
+
+
+@pytest.mark.parametrize(
+    "page_no", [2, 3, 4, 5], ids=["page-rotate-90", "char-90", "char-270", "char-180"]
+)
+def test_korean_words_split_in_every_direction(page_no: int) -> None:
+    # 같은 0.29em 간격 줄을 페이지 회전·글자 회전으로 돌려도 어절이 나뉘어야 한다.
+    # 세로 글(90·270도)은 pdfplumber가 y 허용치로 글자 사이 간격을 판정한다.
+    page = extract_tokens(KOREAN.read_bytes())[page_no - 1]
+    assert [token.text for token in page.tokens] == ["인공지능은", "데이터를", "학습한다"]
+
+
 def test_word_bbox_excludes_trailing_punctuation(pages: list[PageTokens]) -> None:
     by_text = {token.text: token for token in pages[0].tokens}
     plain, dotted = by_text["gradients"], by_text["class."]

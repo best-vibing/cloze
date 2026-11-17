@@ -38,6 +38,8 @@
 
 `filter`가 문서 전체를 받는 이유: 머리글·바닥글은 여러 페이지에서 같은 위치에 반복되는 글로 판정하므로 한 페이지만 봐서는 알 수 없다. 기준을 넘는 위치 묶음은 모두 뺀다(두 장 모아찍기 PDF는 바닥글이 한 쪽에 두 번 나온다). 그렇게 확인된 바닥글 문구로 문서의 다른 곳(표지 등)에서 **줄 전체가 바닥글 구절로만 이루어져 있으면** 그 줄의 토큰도 `footer_phrase`로 뺀다. 본문 문장 속에 같은 구절이 나오면("Vibe coding is a way …") 학습 내용이므로 후보로 남긴다. 구절은 바닥글 줄을 구분 기호나 큰 간격으로 나눈 것이고, 토큰 두 개 이상인 구절만 맞춘다. 한 단어로 맞추면 본문의 정상 단어까지 빠지기 때문이다. 비교는 `word_key`(대소문자·앞뒤 부호·조사 무시)로 한다. 값과 규칙은 [`core/filter`](../../cloze/core/filter.py)가 기준이다.
 
+문제·예시 슬라이드의 토큰은 `question_region`으로 뺀다([`core/question_region`](../../cloze/core/question_region.py)). 줄 첫 토큰이 표시 단어(`Example`, `Exercise`, `Q1`, `문제`, `예제` 등)이고 줄 전체이거나 `:`·`.`·`)`로 끝나거나 번호가 따라올 때만 맞춘다("for example, …"처럼 문장 안의 단어는 아니다). 판별은 쪽이 아니라 슬라이드 영역 단위다. 경계는 반복 머리글·바닥글 중 글자가 가장 작은 줄의 세로 위치이고, 한 쪽에 슬라이드가 한 장이면 쪽 전체가 영역이다. 표시 줄이 영역의 첫 줄(제목 자리, 반복 머리글·바닥글 줄은 건너뜀)일 때만 영역 전체를 뺀다. 본문 중간의 표시 줄("Example: learning rate …")이나 경계 단서가 없을 때는 표시 줄과 바로 이어지는 문단만 뺀다. 개념 슬라이드의 빈칸을 잃지 않기 위해 덜 빼는 쪽을 택했다. 제외 수는 품질 게이트와 규칙 선택기가 목표 개수의 분모에서 뺀다([선택·게이트 2.2](selection-and-quality-gate.md#22-페이지-단위)).
+
 `cli`는 `--dump-stages`를 주면 단계마다 중간 결과를 JSON으로 남긴다. 담당자끼리 실제 파일을 주고받으며 계약을 맞춰 보기 위해서다.
 
 ### 1.3 `ask_llm` 인터페이스와 오류 구분
@@ -105,7 +107,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `GET /images/{key}` | 쿼리 `exp`(만료 시각), `sig`(서명) | `200` 이미지. 서명이 맞고 만료 전이며, 요청자가 소유자이고 문서가 삭제 표시되지 않았을 때만. 아니면 `not_found` |
 | `POST /documents` | multipart: `file`, `preset`(기본 `auto`). 헤더 `Idempotency-Key` | `202` `{document_id, blank_set_id}`. 같은 사용자가 같은 PDF를 올리면 기존 `document_id`를 돌려준다 |
 | `POST /documents/{id}/blank-sets` | `{preset}`. 헤더 `Idempotency-Key` | `202` `{blank_set_id}`. 같은 요청 키면 기존 세트 ID |
-| `GET /documents` | — | `200` 내 문서 목록, 문서마다 세트 요약(`blank_set_id`, `preset_applied`, `status`, `created_at`) |
+| `GET /documents` | — | `200` 내 문서 목록 `[{document_id, filename, blank_sets}]`. `blank_sets`는 그 문서의 세트 요약 배열(`blank_set_id`, `preset_applied`, `status`, `created_at`) |
 | `GET /blank-sets/{id}` | — | `200` 아래 예시. 폴링 겸용 |
 | `POST /blank-sets/{id}/attempts` | `{answers: {blank_id: 입력}}` | `200` `{attempt_id, results: {blank_id: correct / near / wrong}, score, after_reveal}`. 횟수 제한 없음 |
 | `GET /blank-sets/{id}/attempts` | — | `200` 내 시도 목록 `[{attempt_id, submitted_at, score, after_reveal, revealed_at}]`. 처음 풀이와 복습을 나눠 볼 때 쓴다 |
@@ -130,13 +132,47 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 }
 ```
 
+`partial` 예시. 12쪽 중 2쪽(2쪽·7쪽)이 실패한 경우다. `pages`에는 성공한 쪽 10개가 들어가고, 실패한 쪽이 빠져 `page_no`가 이어지지 않는다(아래는 앞의 두 항목만 보였다).
+
+```json
+{
+  "blank_set_id": "6f1c…",
+  "status": "partial",
+  "progress": {"done": 12, "total": 12},
+  "preset_requested": "auto",
+  "preset_applied": "concept",
+  "preset_reason": "강의 슬라이드로 보여 개념 용어 방식을 골랐어요",
+  "pages": [
+    {"page_no": 1, "image_url": "https://…", "width_pt": 720, "height_pt": 540, "blanks": [/* … */]},
+    {"page_no": 3, "image_url": "https://…", "width_pt": 720, "height_pt": 540, "blanks": [/* … */]}
+  ]
+}
+```
+
+`failed` 예시. 결과가 없으므로 `pages`는 비어 있고 `error`가 들어간다. `preset_applied`·`preset_reason`은 분석 전에 끝났으면 `null`이다.
+
+```json
+{
+  "blank_set_id": "6f1c…",
+  "status": "failed",
+  "progress": {"done": 12, "total": 12},
+  "preset_requested": "auto",
+  "preset_applied": null,
+  "preset_reason": null,
+  "pages": [],
+  "error": {"code": "unreadable_pdf", "message": "인식이 잘 안 됐어요, 다시 올려 주세요."}
+}
+```
+
 **인증:** 웹 페이지와 `POST /auth/login` 외의 모든 API와 `/images`는 세션 쿠키가 필요하다(없으면 `unauthorized`). 서버는 요청마다 사용자가 존재하고 쿠키의 `session_version`이 맞는지 확인한다. 상태를 바꾸는 요청은 `Origin`이 자기 주소일 때만 받는다(CSRF 방어). 쿠키의 Secure 속성은 설정 `COOKIE_SECURE`(기본 켬)로 로컬 개발에서만 끌 수 있다.
 
 **계정 관리:** API가 아니라 CLI로 한다. 가입 엔드포인트는 없다(ADR-007). `create-user`(아이디·비밀번호·표시 이름), `set-password`(비밀번호 재설정, `session_version`을 올려 기존 세션을 끊음), `delete-user`(그 사용자의 문서에 삭제 표시 → 정리 작업이 실제 삭제, 세션도 바로 끊김).
 
 `image_url`은 API의 `/images/{key}?exp=…&sig=…` 경로이고, 짧게 만료된다(만료 시간은 [신뢰성 설계](reliability.md) 2절). 이미지를 불러오다 만료로 실패하면 프론트는 `GET /blank-sets/{id}`를 한 번 다시 불러 새 URL을 받는다.
 
-`queued`·`running`일 때는 `pages`가 비어 있고 `progress`만 의미가 있다. `failed`일 때는 `error: {code, message}`가 들어간다.
+`queued`·`running`일 때는 `pages`가 비어 있고 `progress`만 의미가 있다. `failed`일 때는 `error: {code, message}`가 들어가고 `pages`는 비어 있다.
+
+`partial`일 때는 **실패한 쪽을 `pages`에서 뺀다.** 실패한 쪽은 가린 이미지가 없어서 화면이 그릴 수 없기 때문이다. 즉 `pages`는 "풀 수 있는 쪽"이고, 빠진 쪽은 `page_no`의 틈으로 알 수 있다(위 `partial` 예시에서 2쪽이 빠졌다).
 
 | `status` | 뜻 |
 |---|---|
@@ -154,7 +190,9 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `processing_failed` | 실행 횟수 상한까지 일시적 오류·제한 시간 초과·워커 중단이 반복됨 |
 | `document_deleted` | 처리 중에 문서가 삭제됨 |
 
-`progress`는 `{done: 처리를 마친 쪽 수, total: 전체 쪽 수}`다. 실패한 쪽도 "마친" 것으로 센다. 그래야 `done = total`이 "작업이 끝났다"와 같은 뜻이 된다.
+`progress`는 `{done: 처리를 마친 쪽 수, total: 전체 쪽 수}`다. 실패한 쪽도 "마친" 것으로 센다. 그래야 `done = total`이 "작업이 끝났다"와 같은 뜻이 된다. 따라서 끝 상태(`done`·`partial`·`failed`)에서는 항상 `done = total`이고, `total`은 업로드 때 읽은 쪽수라 `failed`에서도 알 수 있다.
+
+`partial`에서는 `progress`와 `pages`의 길이가 다르다. `progress.done`은 "처리를 시도한 쪽"이고 `pages`의 길이는 "풀 수 있는 쪽"이다. 화면에 둘을 그대로 나란히 두면 숫자가 어긋나 보이니, `partial`이면 "12쪽 중 10쪽을 만들었어요"처럼 한 문장으로 합치는 편이 낫다.
 
 ## 3. 오류 형식과 코드
 
