@@ -1,0 +1,19 @@
+# 로컬 개발용. 배포 구성(ADR-007)은 F1에서 따로 만든다.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: cloze
+      POSTGRES_PASSWORD: cloze # 로컬 전용 값. 운영 비밀번호는 시연 기기 .env에만 둔다.
+      POSTGRES_DB: cloze
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "cloze"]
+      interval: 2s
+      retries: 15
+
+volumes:
+  pgdata:

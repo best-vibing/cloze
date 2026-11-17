@@ -21,6 +21,8 @@ from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransien
 from cloze.infra import gemini
 from cloze.infra.gemini import GeminiClient, JSONObject, LLMAttempt
 
+pytestmark = pytest.mark.usefixtures("isolated_environment")
+
 SCHEMA: JSONObject = {
     "type": "object",
     "properties": {"ok": {"type": "boolean"}},

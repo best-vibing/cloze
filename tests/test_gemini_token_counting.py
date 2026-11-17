@@ -17,6 +17,28 @@ from cloze.config import Settings
 from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransientError
 from cloze.infra import gemini
 
+pytestmark = pytest.mark.usefixtures("isolated_environment")
+
+
+@pytest.mark.parametrize("count", [None, 123])
+def test_generation_only_transport_rejects_counting(count: object) -> None:
+    """계산 기능이 없는 전송의 오류는 비밀값 없이 영구 오류로 처리한다."""
+    transport = SimpleNamespace(
+        generate=AsyncMock(return_value='{"ok": true}'),
+        aclose=AsyncMock(),
+        count_tokens=count,
+    )
+
+    async def run() -> None:
+        client = gemini.GeminiClient(_settings(), transport=transport)
+        with pytest.raises(LLMPermanentError, match="does not support token counting") as captured:
+            await client.count_tokens("prompt")
+        assert_detached_private_context(captured.value, "fake-key")
+        transport.generate.assert_not_awaited()
+        await client.aclose()
+
+    asyncio.run(run())
+
 
 def _settings(**kwargs: Any) -> Settings:
     """환경 파일을 읽지 않는 합성 설정을 반환한다."""

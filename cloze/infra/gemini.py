@@ -229,7 +229,7 @@ def _check_references(resource: Resource[Any], resolver: Any) -> None:
 
 
 def _check_resource_references(resource: Resource[Any], resolver: Any) -> None:
-    """?? ??? ??? ????? ??? ???? ????."""
+    """스키마 리소스의 정적 참조와 동적 참조를 사전에 검증한다."""
     for keyword in ("$ref", "$dynamicRef"):
         reference = resource.contents.get(keyword) if isinstance(resource.contents, dict) else None
         if reference is not None:
@@ -439,9 +439,7 @@ class GeminiClient:
                 async with self._semaphore:
                     with self._active_request():
                         total = await self._request_once(
-                            lambda transport: cast(GeminiTokenTransport, transport).count_tokens(
-                                prompt
-                            )
+                            lambda transport: self._count_once(transport, prompt)
                         )
                         return _validated_token_count(total)
             except LLMTransientError:
@@ -449,6 +447,12 @@ class GeminiClient:
                     raise LLMTransientError("Gemini request failed after 3 attempts") from None
                 await _retry_delay(attempt)
         raise AssertionError("Unreachable retry state")
+
+    async def _count_once(self, transport: GeminiTransport, prompt: str) -> int:
+        """생성 전용 전송에는 명시적인 영구 오류를 반환한다."""
+        if not callable(getattr(transport, "count_tokens", None)):
+            raise LLMPermanentError("Gemini transport does not support token counting")
+        return await cast(GeminiTokenTransport, transport).count_tokens(prompt)
 
     async def count_tokens(self, prompt: str) -> int:
         """현재 모델의 비음수 입력 토큰 수를 계산한다. 실제 생성 사용량은 아니다.
