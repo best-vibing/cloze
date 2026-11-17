@@ -15,6 +15,8 @@ from cloze.core.errors import LLMInvalidResponse, LLMPermanentError
 from cloze.infra import gemini
 from cloze.infra.gemini import GeminiClient
 
+pytestmark = pytest.mark.usefixtures("isolated_environment")
+
 SCHEMA: gemini.JSONObject = {"type": "object"}
 FAKE_API_KEY = "fake-api-key-regression-only"
 FAKE_RESPONSE_BODY = "fake-external-response-body-regression-only"
@@ -103,7 +105,7 @@ def test_request_configuration_errors_are_permanent(
 
 
 def direct_chain_log(error: BaseException) -> str:
-    """?? ???? ???? cause? context ??? ?? ??? ????."""
+    """예외의 cause와 context를 직접 순회하는 로거를 재현한다."""
     pending = [error]
     seen: set[int] = set()
     messages: list[str] = []
@@ -118,7 +120,7 @@ def direct_chain_log(error: BaseException) -> str:
 
 
 def assert_detached_private_context(error: Exception, private: str) -> None:
-    """?? ??? ?? ?? ??? ????? ?? ?? ??? ????."""
+    """직접 예외 체인과 일반 traceback에서 비밀값이 분리됐는지 확인한다."""
     logged = direct_chain_log(error) + "".join(traceback.format_exception(error))
     for secret in (private, FAKE_API_KEY, FAKE_RESPONSE_BODY):
         assert secret not in logged
@@ -128,7 +130,7 @@ def assert_detached_private_context(error: Exception, private: str) -> None:
 
 @pytest.mark.parametrize("link", ["context", "cause"])
 def test_chain_logger_detects_suppressed_secrets(link: str) -> None:
-    """from None?? ?? ??? ???? ?? ??? ?? ??? ???."""
+    """from None으로 숨긴 비밀값도 직접 체인 로거가 감지하는지 확인한다."""
     error = LLMInvalidResponse("safe")
     private = ValueError(FAKE_API_KEY + FAKE_RESPONSE_BODY)
     setattr(error, f"__{link}__", private)

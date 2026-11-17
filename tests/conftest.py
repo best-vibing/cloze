@@ -1,4 +1,4 @@
-"""?? ??? ?? ?????? ???? ??? ??."""
+"""Gemini 테스트에서 명시적으로 사용하는 오프라인 환경."""
 
 import socket
 from pathlib import Path
@@ -8,9 +8,9 @@ import pytest
 from google import genai
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """?? Settings ??? ????? .env? ???? ?? SDK? ????."""
+    """설정과 작업 폴더를 격리하고 실제 SDK 및 네트워크 호출을 막는다."""
     monkeypatch.chdir(tmp_path)
     for suffix in (
         "GEMINI_API_KEY",

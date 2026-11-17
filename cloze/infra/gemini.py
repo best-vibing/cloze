@@ -209,7 +209,7 @@ def _check_references(resource: Resource[Any], resolver: Any) -> None:
 
 
 def _check_resource_references(resource: Resource[Any], resolver: Any) -> None:
-    """?? ??? ??? ????? ??? ???? ????."""
+    """스키마 리소스의 정적 참조와 동적 참조를 사전에 검증한다."""
     for keyword in ("$ref", "$dynamicRef"):
         reference = resource.contents.get(keyword) if isinstance(resource.contents, dict) else None
         if reference is not None:

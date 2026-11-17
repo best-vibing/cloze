@@ -12,6 +12,8 @@ from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransien
 from cloze.infra import gemini
 from cloze.infra.gemini import GeminiClient, GeminiResponse, JSONObject, LLMAttempt
 
+pytestmark = pytest.mark.usefixtures("isolated_environment")
+
 SCHEMA: JSONObject = {"type": "object", "required": ["ok"]}
 PRIVATE = "fake-api-key-and-response-body"
 
