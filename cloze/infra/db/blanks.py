@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import Float, Index, Integer, Text, delete, insert
+from sqlalchemy import Float, ForeignKey, Index, Integer, Text, delete, insert
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -23,8 +23,8 @@ class BlankRow(Base):
 
     # ADR-006: 모든 ID는 무작위 UUID다. API의 blank_id가 이 값이다.
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    # blank_sets 테이블이 아직 없어 외래 키를 걸지 않는다. blank_sets를 만드는 PR에서 건다.
-    set_id: Mapped[uuid.UUID]
+    # 세트를 지울 때는 정리 작업이 빈칸을 먼저 지운다. 남아 있으면 외래 키가 막는다(CASCADE 없음).
+    set_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("blank_sets.id"))
     page_no: Mapped[int]
     order: Mapped[int]
     token_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer))

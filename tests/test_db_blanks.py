@@ -1,4 +1,5 @@
-"""save_page_blanks 확인. test_db와 같이 로컬에 DB가 없으면 건너뛰고, CI에서는 실패시킨다.
+"""save_page_blanks 확인. set_id는 외래 키라 insert_blank_set으로 실제 세트를 만든다.
+ test_db와 같이 로컬에 DB가 없으면 건너뛰고, CI에서는 실패시킨다.
 
 테스트는 커밋하지 않는다. 세션을 닫으면 롤백되므로 DB에 행이 남지 않는다.
 동시 저장 테스트만 커밋하고, 끝나면 그 세트의 행을 지운다.
@@ -10,9 +11,10 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 import pytest
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from test_db_blank_sets import delete_blank_set, insert_blank_set
 
 from cloze.config import load_settings
 from cloze.core.models import Blank, BlankStyle
@@ -64,7 +66,6 @@ async def _page(session: AsyncSession, set_id: uuid.UUID, page_no: int) -> list[
 
 
 def test_saved_blanks_read_back_unchanged() -> None:
-    set_id = uuid.uuid4()
     blanks = [
         _blank(1, "Mitochondria"),
         _blank(2, "42", type="number", hint=None, variants=[], answer_group=3),
@@ -72,6 +73,7 @@ def test_saved_blanks_read_back_unchanged() -> None:
 
     async def test(sessions: Sessions) -> None:
         async with sessions() as session:
+            set_id = await insert_blank_set(session)
             await save_page_blanks(session, set_id, 1, blanks)
             assert await _page(session, set_id, 1) == blanks
             ids = (
@@ -83,12 +85,12 @@ def test_saved_blanks_read_back_unchanged() -> None:
 
 
 def test_saving_same_page_again_keeps_only_second() -> None:
-    set_id = uuid.uuid4()
     first = [_blank(1, "Mitochondria"), _blank(2, "Nucleus")]
     second = [_blank(1, "Ribosome")]
 
     async def test(sessions: Sessions) -> None:
         async with sessions() as session:
+            set_id = await insert_blank_set(session)
             await save_page_blanks(session, set_id, 1, first)
             await save_page_blanks(session, set_id, 1, second)
             assert await _page(session, set_id, 1) == second
@@ -99,12 +101,13 @@ def test_saving_same_page_again_keeps_only_second() -> None:
 
 
 def test_saving_one_page_leaves_other_pages_and_sets() -> None:
-    set_id, other_set_id = uuid.uuid4(), uuid.uuid4()
     page_2 = [_blank(1, "Nucleus")]
     other_set = [_blank(1, "Golgi")]
 
     async def test(sessions: Sessions) -> None:
         async with sessions() as session:
+            set_id = await insert_blank_set(session, key="k1")
+            other_set_id = await insert_blank_set(session, key="k2")
             await save_page_blanks(session, set_id, 1, [_blank(1, "Mitochondria")])
             await save_page_blanks(session, set_id, 2, page_2)
             await save_page_blanks(session, other_set_id, 1, other_set)
@@ -116,11 +119,10 @@ def test_saving_one_page_leaves_other_pages_and_sets() -> None:
 
 
 def test_save_does_not_commit() -> None:
-    set_id = uuid.uuid4()
-    count = select(func.count()).select_from(BlankRow).where(BlankRow.set_id == set_id)
-
     async def test(sessions: Sessions) -> None:
         async with sessions() as session, sessions() as other:
+            set_id = await insert_blank_set(session)
+            count = select(func.count()).select_from(BlankRow).where(BlankRow.set_id == set_id)
             await save_page_blanks(session, set_id, 1, [_blank(1, "Mitochondria")])
             assert await session.scalar(count) == 1
             # 커밋했다면 다른 연결에서도 보인다.
@@ -148,11 +150,13 @@ async def _wait_until_lock_wait(sessions: Sessions, pid: int) -> None:
 
 def test_concurrent_saves_of_same_page_leave_one_copy() -> None:
     # 재등록과 죽은 작업 회수가 겹치면 같은 세트를 두 워커가 동시에 저장한다(ADR-013).
-    set_id = uuid.uuid4()
     first = [_blank(1, "A1"), _blank(2, "A2")]
     second = [_blank(1, "B1"), _blank(2, "B2")]
 
     async def test(sessions: Sessions) -> None:
+        async with sessions() as session:
+            set_id = await insert_blank_set(session)
+            await session.commit()
         try:
             async with sessions() as worker_1, sessions() as worker_2:
                 await save_page_blanks(worker_1, set_id, 1, first)
@@ -169,7 +173,6 @@ def test_concurrent_saves_of_same_page_leave_one_copy() -> None:
                 assert await _page(session, set_id, 1) == first
         finally:
             async with sessions() as session:
-                await session.execute(delete(BlankRow).where(BlankRow.set_id == set_id))
-                await session.commit()
+                await delete_blank_set(session, set_id)
 
     _run(test)
