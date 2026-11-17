@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, pool
 
 # 테이블 클래스는 모듈을 불러와야 Base.metadata에 등록된다. 빠지면 autogenerate가 빈 metadata와
 # 비교해 빈 파일이나 drop_table을 만든다(#82). 새 테이블 모듈도 여기에 더한다(test_db가 검사).
+import cloze.infra.db.blank_sets  # noqa: F401
 import cloze.infra.db.blanks  # noqa: F401
 import cloze.infra.db.documents  # noqa: F401
 import cloze.infra.db.users  # noqa: F401
