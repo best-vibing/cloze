@@ -7,6 +7,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass
+from functools import partial
 from time import monotonic
 from typing import Any, Literal, NoReturn, Protocol, cast
 
@@ -74,6 +75,34 @@ class GeminiTokenTransport(GeminiTransport, Protocol):
         ...
 
 
+class _ConfiguredTransport(Protocol):
+    async def generate(
+        self,
+        prompt: str,
+        schema: JSONObject,
+        image: Image | None,
+        *,
+        seed: int | None,
+        temperature: float | None,
+    ) -> GeminiResponse | str: ...
+
+
+async def _generate_configured(
+    transport: GeminiTransport,
+    prompt: str,
+    schema: JSONObject,
+    image: Image | None,
+    *,
+    seed: int | None,
+    temperature: float | None,
+) -> GeminiResponse | str:
+    if seed is None and temperature is None:
+        return await transport.generate(prompt, schema, image)
+    return await cast(_ConfiguredTransport, transport).generate(
+        prompt, schema, image, seed=seed, temperature=temperature
+    )
+
+
 def _http_options(settings: Settings) -> types.HttpOptions:
     """초 단위 설정을 SDK 밀리초로 변환하고 내부 재시도를 끈다."""
     timeout = settings.gemini_timeout_s
@@ -101,7 +130,13 @@ class _SDKTransport:
         self._model = settings.gemini_model
 
     async def generate(
-        self, prompt: str, schema: JSONObject, image: Image | None
+        self,
+        prompt: str,
+        schema: JSONObject,
+        image: Image | None,
+        *,
+        seed: int | None = None,
+        temperature: float | None = None,
     ) -> GeminiResponse:
         """선택적 PIL 이미지와 JSON Schema를 SDK에 전달한다.
 
@@ -109,6 +144,8 @@ class _SDKTransport:
             prompt: 호출자가 구성한 지시문.
             schema: 응답 객체의 JSON Schema.
             image: 메모리에 있는 PIL 이미지 또는 None.
+            seed: 선택적 Gemini 생성 seed.
+            temperature: 선택적 샘플링 온도.
 
         Returns:
             응답 텍스트와 SDK가 보고한 실제 사용량.
@@ -118,7 +155,10 @@ class _SDKTransport:
             contents.append(image)
         try:
             config = types.GenerateContentConfig(
-                response_mime_type="application/json", response_json_schema=schema
+                response_mime_type="application/json",
+                response_json_schema=schema,
+                seed=seed,
+                temperature=temperature,
             )
         except ValueError:
             raise LLMPermanentError("Invalid Gemini request configuration") from None
@@ -337,9 +377,7 @@ class GeminiClient:
 
     async def _attempt(
         self,
-        prompt: str,
-        schema: JSONObject,
-        image: Image | None,
+        operation: Callable[[GeminiTransport], Awaitable[GeminiResponse | str]],
         validator: validators.Draft202012Validator,
         attempt: int,
     ) -> tuple[JSONObject | None, Exception | None, LLMAttempt]:
@@ -351,9 +389,7 @@ class GeminiClient:
         started = monotonic()
         try:
             try:
-                raw = await self._request_once(
-                    lambda transport: transport.generate(prompt, schema, image)
-                )
+                raw = await self._request_once(operation)
             finally:
                 latency_ms = (monotonic() - started) * 1000
             response = GeminiResponse(raw) if isinstance(raw, str) else raw
@@ -375,9 +411,7 @@ class GeminiClient:
 
     async def _request(
         self,
-        prompt: str,
-        schema: JSONObject,
-        image: Image | None,
+        operation: Callable[[GeminiTransport], Awaitable[GeminiResponse | str]],
         validator: validators.Draft202012Validator,
         on_attempt: Callable[[LLMAttempt], None] | None,
     ) -> JSONObject:
@@ -386,9 +420,7 @@ class GeminiClient:
             async with self._semaphore:
                 with self._active_request():
                     self._get_transport()
-                    result, failure, record = await self._attempt(
-                        prompt, schema, image, validator, attempt + 1
-                    )
+                    result, failure, record = await self._attempt(operation, validator, attempt + 1)
             _notify_attempt(on_attempt, record)
             if not isinstance(failure, LLMTransientError):
                 if failure is not None:
@@ -407,6 +439,8 @@ class GeminiClient:
         image: Image | None = None,
         *,
         on_attempt: Callable[[LLMAttempt], None] | None = None,
+        seed: int | None = None,
+        temperature: float | None = None,
     ) -> JSONObject:
         """설정된 동시 호출 상한 안에서 응답을 받아 검증된 dict를 반환한다.
 
@@ -415,6 +449,8 @@ class GeminiClient:
             schema: Draft 2020-12 호환 응답 JSON Schema. 외부 참조는 지원하지 않는다.
             image: SDK에 전달할 PIL.Image.Image 또는 None.
             on_attempt: 완료된 전송 시도마다 호출할 동기 콜백. 오류는 재시도 없이 전파한다.
+            seed: 선택적 Gemini 생성 seed.
+            temperature: 선택적 샘플링 온도.
 
         Returns:
             스키마 검증을 통과한 JSON 객체.
@@ -427,7 +463,15 @@ class GeminiClient:
         try:
             _check_input(prompt, image)
             validator = _validator(schema)
-            return await self._request(prompt, schema, image, validator, on_attempt)
+            operation = partial(
+                _generate_configured,
+                prompt=prompt,
+                schema=schema,
+                image=image,
+                seed=seed,
+                temperature=temperature,
+            )
+            return await self._request(operation, validator, on_attempt)
         except (LLMInvalidResponse, LLMTransientError, LLMPermanentError) as error:
             failure = error
         _raise_detached(failure)
