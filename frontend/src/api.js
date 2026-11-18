@@ -8,8 +8,6 @@ const mockEnv = import.meta.env.VITE_API_MOCK;
 export const isMock = mockEnv === undefined ? import.meta.env.DEV : mockEnv === "1";
 // Mock이 아니면 불러오지 않아, 운영 빌드에는 mock/server.js가 들어가지 않는다.
 const mock = isMock ? await import("./mock/server.js") : null;
-/** Mock일 때 주소에 ?set= 이 없으면 여는 연습용 세트. 실제 서버에서는 없다. */
-export const demoSetId = isMock ? mock.DEMO_SET_ID : null;
 
 /** 서버가 돌려준 오류. 모양은 계약 3절의 {"error": {"code", "message"}}다. */
 export class ApiError extends Error {
