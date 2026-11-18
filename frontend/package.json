@@ -1,0 +1,17 @@
+{
+  "name": "cloze-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "cloze 화면(Svelte 5 + Vite). 결정 근거는 docs/decisions/ADR-012",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "svelte": "5.57.3",
+    "vite": "8.3.5"
+  }
+}
