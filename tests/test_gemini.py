@@ -211,16 +211,30 @@ def test_concurrency_limit(limit: int) -> None:
                     tasks = [group.create_task(request(i)) for i in range(len(attempted))]
                     await asyncio.gather(*(event.wait() for event in attempted))
                     await saturated.wait()
-                    assert active == limit
-                    assert transport.generate.await_count == limit
+                    assert_concurrency_saturated(active, limit, transport.generate.await_count)
                     release.set()
-                assert all(task.result() == {"ok": True} for task in tasks)
-                assert peak == limit
-                assert transport.generate.await_count == len(attempted)
+                assert_concurrency_complete(
+                    tasks, peak, limit, transport.generate.await_count, len(attempted)
+                )
             finally:
                 await client.aclose()
 
     asyncio.run(scenario())
+
+
+def assert_concurrency_saturated(active: int, limit: int, sent: int) -> None:
+    """해제 전 설정된 상한만큼 전송에 진입했는지 확인한다."""
+    assert active == limit
+    assert sent == limit
+
+
+def assert_concurrency_complete(
+    tasks: list[asyncio.Task[JSONObject]], peak: int, limit: int, sent: int, total: int
+) -> None:
+    """상한을 지키며 모든 요청이 정상 완료했는지 확인한다."""
+    assert all(task.result() == {"ok": True} for task in tasks)
+    assert peak == limit
+    assert sent == total
 
 
 def test_cancel_releases_slot() -> None:

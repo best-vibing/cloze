@@ -212,6 +212,12 @@ def build_analysis_prompt(pages: Sequence[Sequence[AnalysisToken]]) -> str:
     headings = list(filter(None, map(lambda page: _heading_fragment(*page), indexed)))
     bodies = [f"본문 페이지 {number}: " + _page_text(tokens) for number, tokens in selected]
     data_limit = MAX_ANALYSIS_INPUT_CHARS - len(_INSTRUCTIONS) - len(_DATA_END)
+    data = _allocate_analysis_data(headings, bodies, data_limit)
+    return _INSTRUCTIONS + limit_analysis_input(data, data_limit) + _DATA_END
+
+
+def _allocate_analysis_data(headings: list[str], bodies: list[str], data_limit: int) -> str:
+    """제목과 본문에 문자 예산을 배분하고 짧은 조각의 잔여분을 재사용한다."""
     budget = data_limit + 1  # 첫 출력 조각의 선행 구분자는 마지막에 제거한다.
     data: list[str] = []
     for fragments, available in ((headings, max(0, budget // 2)), (bodies, None)):
@@ -227,7 +233,7 @@ def build_analysis_prompt(pages: Sequence[Sequence[AnalysisToken]]) -> str:
             remaining -= len(clipped[index])
         budget -= sum(map(len, clipped))
         data.extend(filter(None, clipped))
-    return _INSTRUCTIONS + limit_analysis_input("".join(data)[1:], data_limit) + _DATA_END
+    return "".join(data)[1:]
 
 
 def _validated_result(response: object) -> dict[str, str]:
@@ -288,7 +294,7 @@ async def analyze_document(
     Raises:
         Exception: 공통 LLM 오류와 TimeoutError 외 프로그래밍 오류는 전파한다.
     """
-    if not any(_has_sufficient_text(_page_text(tokens)) for tokens in pages):
+    if not _has_analysis_text(pages):
         return _default_result("분석할 텍스트가 부족합니다")
     prompt = build_analysis_prompt(pages)
     try:
@@ -300,6 +306,11 @@ async def analyze_document(
         return _default_result("자료 분석 응답 형식 또는 허용값 오류")
     except (LLMTransientError, LLMPermanentError, TimeoutError) as error:
         return _default_result(f"자료 분석 호출 실패: {type(error).__name__}")
+
+
+def _has_analysis_text(pages: Sequence[Sequence[AnalysisToken]]) -> bool:
+    """분석에 충분한 텍스트가 있는 페이지의 존재 여부를 반환한다."""
+    return any(_has_sufficient_text(_page_text(tokens)) for tokens in pages)
 
 
 async def _fit_token_budget(prompt: str, count_tokens: CountTokens) -> str:

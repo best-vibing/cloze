@@ -66,6 +66,14 @@ class GeminiTransport(Protocol):
         ...
 
 
+class GeminiTokenTransport(GeminiTransport, Protocol):
+    """기존 생성 전송과 호환되는 선택적 토큰 계산 경계."""
+
+    async def count_tokens(self, prompt: str) -> int:
+        """현재 모델의 입력 토큰 수를 계산한다."""
+        ...
+
+
 def _http_options(settings: Settings) -> types.HttpOptions:
     """초 단위 설정을 SDK 밀리초로 변환하고 내부 재시도를 끈다."""
     timeout = settings.gemini_timeout_s
@@ -120,6 +128,11 @@ class _SDKTransport:
             config=config,
         )
         return _sdk_response(response)
+
+    async def count_tokens(self, prompt: str) -> int:
+        """생성과 같은 모델로 SDK의 비동기 토큰 계산을 요청한다."""
+        response = await self._client.models.count_tokens(model=self._model, contents=prompt)
+        return _validated_token_count(getattr(response, "total_tokens", None))
 
     async def aclose(self) -> None:
         """SDK의 비동기 HTTP 연결을 해제한다."""
@@ -186,6 +199,13 @@ async def _close_once(transport: GeminiTransport) -> None:
     else:
         return
     _raise_detached(failure)
+
+
+def _validated_token_count(total: object) -> int:
+    """누락값, bool, 음수 및 정수가 아닌 토큰 계산값을 거절한다."""
+    if type(total) is not int or total < 0:
+        raise LLMInvalidResponse("Gemini token count must be a non-negative integer")
+    return total
 
 
 def _validator(schema: JSONObject) -> validators.Draft202012Validator:
@@ -408,6 +428,42 @@ class GeminiClient:
             _check_input(prompt, image)
             validator = _validator(schema)
             return await self._request(prompt, schema, image, validator, on_attempt)
+        except (LLMInvalidResponse, LLMTransientError, LLMPermanentError) as error:
+            failure = error
+        _raise_detached(failure)
+
+    async def _count_request(self, prompt: str) -> int:
+        """생성과 슬롯·전송 오류 정책을 공유하며 일시적 오류만 재시도한다."""
+        for attempt in range(3):
+            try:
+                async with self._semaphore:
+                    with self._active_request():
+                        total = await self._request_once(
+                            lambda transport: self._count_once(transport, prompt)
+                        )
+                        return _validated_token_count(total)
+            except LLMTransientError:
+                if attempt == 2:
+                    raise LLMTransientError("Gemini request failed after 3 attempts") from None
+                await _retry_delay(attempt)
+        raise AssertionError("Unreachable retry state")
+
+    async def _count_once(self, transport: GeminiTransport, prompt: str) -> int:
+        """생성 전용 전송에는 명시적인 영구 오류를 반환한다."""
+        if not callable(getattr(transport, "count_tokens", None)):
+            raise LLMPermanentError("Gemini transport does not support token counting")
+        return await cast(GeminiTokenTransport, transport).count_tokens(prompt)
+
+    async def count_tokens(self, prompt: str) -> int:
+        """현재 모델의 비음수 입력 토큰 수를 계산한다. 실제 생성 사용량은 아니다.
+
+        빈 입력·종료는 LLMPermanentError, 잘못된 응답은 LLMInvalidResponse,
+        세 번 지속된 일시적 오류는 LLMTransientError다. 취소는 그대로 전파한다.
+        생성 전용 on_attempt에는 기록하지 않는다.
+        """
+        try:
+            _check_input(prompt, None)
+            return await self._count_request(prompt)
         except (LLMInvalidResponse, LLMTransientError, LLMPermanentError) as error:
             failure = error
         _raise_detached(failure)
