@@ -2,90 +2,23 @@
 
 import argparse
 import csv
-import math
-import re
 from collections import defaultdict
 from collections.abc import Sequence
 from io import StringIO
 from pathlib import Path
 
-from cloze.cli.label_sheet import COLUMNS
+from cloze.cli.label_sheet import INTEGER_COLUMNS, UNIT_COLUMNS, read_sheet
 from cloze.core.quality_calibration import Evaluation, compare_thresholds, parse_label_csv
 
-INTEGER_COLUMNS = (
-    "page",
-    "order",
-    "extract_version",
-    "answer_len",
-    "hangul",
-    "exposure_count",
-    "page_target",
-)
-UNIT_COLUMNS = (
-    "page_survival",
-    "score",
-    "size_signal",
-    "bold_signal",
-    "heading_signal",
-    "frequency_signal",
-)
 METRICS = (*INTEGER_COLUMNS[3:], *UNIT_COLUMNS)
 
 
-def _integer(column: str, value: str) -> str:
-    """정수 열을 검증하고 같은 숫자를 나타내는 식별자를 정규화한다."""
-    if re.fullmatch(r"[0-9]+", value) is None:
-        raise ValueError(f"{column}: expected a nonnegative integer")
-    number = int(value)
-    minimum = int(column in INTEGER_COLUMNS[:3])
-    maximum = 1 if column == "hangul" else number
-    if not minimum <= number <= maximum:
-        raise ValueError(f"{column}: integer outside permitted range")
-    return str(number)
-
-
-def _numbers(record: dict[str, str]) -> None:
-    """기존 정수 열과 비율·신호 열의 자료형과 범위를 검증한다."""
-    for column in INTEGER_COLUMNS:
-        record[column] = _integer(column, record[column])
-    for column in UNIT_COLUMNS:
-        value = float(record[column])
-        if not math.isfinite(value) or not 0 <= value <= 1:
-            raise ValueError(f"{column}: expected a finite value in [0, 1]")
-
-
-def _validate_row(row: list[str], header: list[str]) -> dict[str, str]:
-    """한 행의 열 개수와 기존 숫자 열의 자료형·범위를 확인한다."""
-    if len(row) != len(header):
-        raise ValueError("Column count mismatch")
-    record = dict(zip(header, row, strict=True))
-    for column in ("file", "answer", "labeler"):
-        if not record[column].strip():
-            raise ValueError(f"Missing {column}")
-    record["labeler"] = record["labeler"].strip()
-    _numbers(record)
-    return record
-
-
-def _header(header: list[str]) -> None:
-    """기존 시트의 필수 열과 유일한 머리글을 확인한다."""
-    if not all(map(str.strip, header)) or len(set(header)) != len(header):
-        raise ValueError("Missing or duplicate label-sheet columns")
-    if not set(COLUMNS) <= set(header):
-        raise ValueError("Missing or duplicate label-sheet columns")
-
-
 def _groups(text: str) -> dict[str, list[dict[str, str]]]:
-    """BOM을 지원하고 동일 평가자의 중복 칸 및 누락 라벨을 거절한다."""
-    rows = list(csv.reader(StringIO(text.removeprefix("\ufeff")), strict=True))
-    header = rows[0] if rows else []
-    _header(header)
+    records, problems = read_sheet(text, completed=True)
+    if problems:
+        raise ValueError(problems[0])
     groups: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for line, row in enumerate(rows[1:], start=2):
-        try:
-            record = _validate_row(row, header)
-        except ValueError as error:
-            raise ValueError(f"Record {line}: {error}") from error
+    for record in records:
         groups[record["labeler"]].append(record)
     return dict(groups)
 
