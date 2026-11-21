@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from cloze.core.filter import word_key
+from cloze.core.filter import excluded_count, word_key
 from cloze.core.models import PageCandidates, PageTokens, Policy, Selection, Slot, Token
 
 # [가설] 신호별 가중치. 합은 1이다. 실데이터로 보정한다(selection-and-quality-gate.md 2.5절).
@@ -104,13 +104,19 @@ def select_rule(
     doc_stats: DocStats,
 ) -> Selection:
     """칸 하나는 토큰 하나다. 프리셋은 아직 concept뿐이라 preset 값으로 갈라지지 않는다."""
-    target = round(len(page.tokens) * policy.density / 100)
+    target = target_count(page, candidates, policy)
     ranked = _rank(page, candidates, policy.seed, doc_stats)
     # avoid에 든 토큰을 뒤로 보내, 후보가 모자랄 때만 다시 쓰이게 한다.
     fresh = [token for token in ranked if token.id not in avoid]
     reused = [token for token in ranked if token.id in avoid]
     ids = sorted(token.id for token in _pick([*fresh, *reused], target))
     return Selection(spans=[[id_] for id_ in ids], slots=[Slot() for _ in ids], source="rule")
+
+
+def target_count(page: PageTokens, candidates: PageCandidates, policy: Policy) -> int:
+    """목표 빈칸 수. 문제 영역(question_region)을 뺀 단어 수에 비례한다."""
+    countable = len(page.tokens) - excluded_count(candidates, "question_region")
+    return round(countable * policy.density / 100)
 
 
 def _rank(page: PageTokens, candidates: PageCandidates, seed: int, stats: DocStats) -> list[Token]:
