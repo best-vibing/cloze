@@ -8,12 +8,15 @@ dependencies = [
     "alembic>=1.20.1",
     "fastapi>=0.162.7",
     "google-genai>=2.33",
+    "httpx>=0.28.1,<1",
+    "jsonschema>=4.26,<5",
     "pdfplumber>=0.11.10",
     "pillow>=13.0",
     "psycopg[binary]>=3.3.8",
     "pydantic>=2.14",
     "pydantic-settings>=2.16",
     "pypdfium2>=5.14",
+    "referencing>=0.37,<1",
     "sqlalchemy[asyncio]>=2.1.8",
     "uvicorn>=0.54.0",
 ]
@@ -25,6 +28,7 @@ dev = [
     "mypy>=1.18",
     "pytest>=9.1",
     "ruff>=0.17",
+    "types-jsonschema>=4.26.0.20261006,<5",
 ]
 
 [build-system]

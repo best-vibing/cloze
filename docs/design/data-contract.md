@@ -27,12 +27,16 @@
 | `filter` | **문서 전체 페이지**의 tokens, 정책 | 페이지마다 `{후보 token id 목록, 제외한 id와 사유}` | LLM·검증 |
 | `analyze` | 대표 페이지 tokens, `ask_llm` | `{doc_type, preset, reason, source: llm / default}` | LLM·검증 |
 | `select` | 페이지 tokens, 후보 id, 정책, `ask_llm`, 직전 실패 사유(재시도 때), 피할 token id(같은 문서의 이전 세트에서 쓴 것) | `{spans: [[token id…]], 칸별 type·hint·variants, source: gemini / rule}` | LLM·검증 |
-| `gate` | 페이지 tokens, select 결과, 정책 | `{blanks, 탈락 칸과 사유, quality, passed}`. blanks마다 `order`(페이지 안 읽는 순서: 줄 → x좌표), `answer_group`(**같은 페이지 안**에서 같은 정답인 칸끼리), 토큰에서 가져온 글자 크기·색을 채운다 | LLM·검증 |
+| `gate` | 페이지 tokens, select 결과, 정책 | `{blanks, 탈락 칸과 사유, quality, passed}`. blanks마다 `order`(페이지 안 읽는 순서: 줄 → x좌표), `answer_group`(**같은 페이지 안**에서 같은 정답인 칸끼리), 토큰에서 가져온 글자 크기를 채운다. 색 처리 단계는 아래 설명 참조 | LLM·검증 |
 | `redact` | 페이지 이미지, blanks의 bbox | 가린 이미지, 칸마다 칠한 색(`style.bg_color`로 들어감). 빈칸이 없어도 가린 이미지를 만든다 | PDF 처리 |
 | `pipeline.prepare` | PDF 바이트 | 문서 추출 결과(페이지별 page 정보·이미지·tokens). 워커는 이것을 L2로 저장한다 | 공동 |
 | `pipeline.build` | 문서 추출 결과(새로 만든 것 또는 저장된 것), 정책, `ask_llm`, 건너뛸 페이지 번호, 저장된 분석 결과(있으면), 피할 token id | 페이지별 결과(1.4)를 **한 페이지씩 차례로 내보낸다.** 워커는 받는 대로 저장한다(L4) | 공동 |
 
 규칙 기반 선택기(`select/rule`)는 `ask_llm` 대신 문서 통계(`doc_stats`: 정규화한 단어의 빈도, 제목급 줄의 단어)를 받는다.
+
+추출 토큰(`Token`)과 선택기 출력(`Selection`)의 필드·허용값은 [`core/models.py`](../../cloze/core/models.py)가 기준이다. 선택기 출력의 `source`는 `gemini / rule`이며, 페이지 결과의 `selection.source`와는 구분한다(1.4절). 빈칸이 없을 때의 `none`은 파이프라인이 붙이며 `Selection` 모델에는 포함하지 않는다.
+
+`Token`에는 `font_color`, `conf`, `block_id`를 두지 않는다([Issue #41 팀 합의](https://github.com/best-vibing/cloze/issues/41#issuecomment-6818882350)). 색은 토큰 필드가 아니라 `blanks[].style`을 채우는 별도 처리 단계에서 다루며, redact가 칠할 때 계산한다. 구체적인 style 조립 방식은 [PR #94](https://github.com/best-vibing/cloze/pull/94)의 후속 합의 사항이다.
 
 `pipeline`을 `prepare`와 `build` 둘로 나눈 이유: 추출 결과를 저장했다가 다시 만들기에서 재사용하고(L2), 재실행 때 끝난 페이지를 건너뛰려면(L4) 워커가 중간에 끼어들 수 있어야 하기 때문이다.
 
@@ -56,9 +60,45 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 | `LLMInvalidResponse` | 응답을 파싱할 수 없거나 스키마와 다름 | 검증 실패로 취급: 사유를 붙여 1회 재시도 → 규칙 기반 | 계속 진행 |
 | `LLMPermanentError` | 인증 실패, 설정 오류, 없는 모델 | 그 세트의 남은 페이지는 LLM을 부르지 않고 규칙 기반으로 만든다. 분석이면 기본 방식 | 계속 진행. 운영 경보를 즉시 보낸다 |
 
+#### 생성 시도 기록 (선택)
+
+`GeminiClient.ask_llm(prompt, schema, image=None, *, on_attempt=None)`의 반환값은
+기존과 같은 검증된 dict다. `on_attempt: Callable[[LLMAttempt], None] | None`은
+완료된 전송 시도마다 한 번 호출되는 동기 콜백이며, 자료형의 기준은
+[`LLMAttempt`와 `GeminiResponse`](../../cloze/infra/gemini.py)다.
+`attempt`는 ask_llm 호출마다 1부터 시작하고 `outcome`은 `ok`, `invalid`,
+`transient`, `permanent`다. 파싱·스키마 실패도 `invalid`로 기록한다.
+`latency_ms`는 단조 시계로 잰 시도 시간이며 슬롯 대기·백오프·콜백 시간은 제외한다.
+`model`은 설정된 생성 모델이다. `input_tokens`/`output_tokens`는 SDK의 실제
+`usage_metadata.prompt_token_count`/`candidates_token_count`이며 추론 토큰은 합산하지 않는다.
+누락·비정상 값은 None, 실제 0은 0이다. `count_tokens()`의 사전 추정값을 사용하지 않는다.
+기존 문자열 Fake Transport도 지원하며 그 사용량은 None이다.
+취소는 그대로 전파하고 취소된 전송·입력 검증·종료 후 요청 거절에는 완료 기록을 만들지 않는다.
+콜백 예외는 그대로 전파하며 추가 전송하지 않는다. 워커 콜백은 빠르게 기록을 수집해야 한다.
+
+#### 오류 보호와 종료 경계
+
+`ask_llm()`과 `aclose()`가 변환하는 알려진 Gemini 오류는 원본 `__context__`,
+`__cause__`, 전송 traceback을 분리한다. 체인을 직접 읽는 로거에도 키·본문을 전달하지 않는다.
+콜백과 예상하지 못한 프로그래밍 오류는 호출자 책임이며 로컬 변수 전체 덤프는 보호 범위가 아니다.
+요청 구성 단계의 오류는 영구 오류, 응답 검증은 invalid로 유지한다. 단, SDK의
+`generate_content()` 내부 ValueError/ValidationError는 요청/응답 발생 단계를 판별할 수 없어
+기존 `LLMInvalidResponse` 분류를 유지한다. 단계별 SDK 지원 없이 전부 영구 오류로 바꾸지 않는다.
+
+`aclose()`는 활성 전송을 기다리고 새 요청을 거절한다. 백오프·슬롯 대기는 기다리지 않으며
+다음 진입 시 기존 `LLMPermanentError("Gemini client is closed")`로 끝난다.
+종료와 인증 오류를 별도 타입으로 구분하는 계약은 팀 합의가 필요하다.
+전송·종료 안의 같은 Task에서 재진입한 종료는 영구 오류로 즉시 거절한다.
+별도 Task를 만든 뒤 서로 기다리는 간접 순환은 탐지하지 못하므로 외부 수명 코드에서 종료한다.
+종료의 API 상태 코드는 기존 분류, 네트워크·타임아웃은 transient, 종료 설정 ValueError는
+permanent로 전달한다. 종료는 자동 재시도하거나 생성 기록을 추가하지 않는다.
+실패·취소 후 연결을 남겨 명시적 `aclose()` 재호출로 정리할 수 있다.
+
 ### 1.4 페이지 결과(최종 출력)
 
 `pipeline`의 출력이다. `cli`는 이 모양을 JSON 파일로 저장하고, 프론트 스파이크는 이 파일을 가짜 데이터로 쓴다.
+
+`tokens`의 필드 정의와 `word_bbox`의 의미·기본값은 [`Token`](../../cloze/core/models.py)이 기준이다. 토큰 id는 페이지 안에서만 고유하며 LLM과도 이 id로 주고받는다. `word_bbox`가 없는 옛 추출 결과는 추출 버전이 달라 L2에서 재사용하지 않는다([PR #74](https://github.com/best-vibing/cloze/pull/74)).
 
 ```json
 {
@@ -66,8 +106,7 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
   "page": {"page_no": 3, "width_pt": 720, "height_pt": 540, "source": "textlayer"},
   "tokens": [
     {"id": 12, "text": "Mitochondria,", "bbox": [0.12, 0.31, 0.30, 0.35], "word_bbox": [0.12, 0.31, 0.29, 0.35],
-     "line_id": 4, "block_id": 1, "font_size": 18.0, "fontname": "Helvetica-Bold",
-     "font_color": "#1a1a1a", "conf": 1.0}
+     "line_id": 4, "font_size": 18.0, "fontname": "Helvetica-Bold"}
   ],
   "blanks": [
     {"token_ids": [12], "answer": "Mitochondria", "bbox": [0.115, 0.305, 0.295, 0.355],
@@ -80,19 +119,14 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 
 | 필드 | 뜻 |
 |---|---|
-| `schema_version` | 계약 버전. 필드를 바꿀 때 올린다. 2: `tokens[].word_bbox` 추가 |
+| `schema_version` | 계약 버전. 현재 값은 [`core/models.py`의 `SCHEMA_VERSION`](../../cloze/core/models.py)이 기준이다. 2: `tokens[].word_bbox` 추가([PR #74](https://github.com/best-vibing/cloze/pull/74)). 이번 문서 수정에서는 바꾸지 않는다 |
 | `page.source` | `textlayer` 또는 `ocr` |
-| `tokens[].id` | 페이지 안에서만 고유한 정수. LLM에는 이 id로 보내고 이 id로 받는다 |
 | `bbox` | `[x0, y0, x1, y1]`, 페이지 기준 0~1, 좌상단 원점 |
-| `tokens[].word_bbox` | 앞뒤 문장 부호를 뺀 글자들의 bbox. 뗄 부호가 없으면 `null`(= `bbox`). 정답과 칠하는 범위는 이것을 쓴다. 이 필드가 없는 옛 토큰(`extract_version` 1)은 추출 버전이 달라 L2에서 재사용되지 않는다 |
-| `line_id`, `block_id` | 같은 줄·같은 문단 판정용. 품질 게이트의 "주변 문맥"과 구 연속성 검사에 쓴다 |
-| `fontname` | 폰트 이름. 규칙 기반 선택기가 굵은 글씨를 판정할 때 쓴다 |
-| `conf` | 인식 신뢰도. 텍스트 레이어는 1.0 |
 | `blanks[].answer` | 토큰 원문에서 앞뒤 문장 부호를 뗀 글자. 한국어 조사는 떼지 않는다(v1은 어절 단위, [채점 1.1](grading-and-overlay.md#11-판정-순서)) |
 | `blanks[].bbox` | 묶인 토큰 `word_bbox`(없으면 `bbox`)의 합집합 + 패딩. 문장 부호는 칠하지 않는다. 부호를 뗀 변에는 패딩을 붙이지 않는다(패딩이 글자와 부호 사이 여백보다 커서 부호를 덮기 때문) |
 | `blanks[].type` | `text`, `number`, `term` |
 | `blanks[].style` | 입력칸 표시 정보(글자 크기 비율·글자색·배경색). [채점·입력칸 표시](grading-and-overlay.md) 3.1 |
-| `selection.source` | `gemini`, `fallback`(규칙 기반), `none`(게이트 미달로 빈칸 없음) |
+| `selection.source` | `gemini`, `rule`(규칙 기반), `none`(게이트 미달 등으로 빈칸이 없을 때 파이프라인이 부여) |
 
 ## 2. API
 
@@ -218,6 +252,12 @@ ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파
 한도의 초기값은 [신뢰성 설계](reliability.md) 5절에 둔다.
 
 ## 4. 데이터 모델
+
+워커는 요청별 리스트의 `append`를 `on_attempt`로 전달하고, 실패 시에도 수집한 기록을
+`llm_calls`에 저장할 수 있다. 각 기록에 `set_id`, `page_no`, `kind`, `created_at`을
+워커가 붙인다. `attempt`는 개별 ask_llm 내 번호이므로 파이프라인의 재호출은 워커가 구분한다.
+동시 작업은 별도 리스트/콜백을 사용한다. 키·프롬프트·응답 본문·원본 예외는 저장하지 않는다.
+DB 저장과 콜백 실패 복구는 이번 변경 범위에 포함하지 않는다.
 
 ```
 users 1─N documents 1─N blank_sets 1─N blanks
