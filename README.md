@@ -49,6 +49,16 @@ Python 버전과 라이브러리 버전은 팀 전체가 같게 쓴다. `uv`가 
 
 PR을 올리면 CI(`.github/workflows/ci.yml`)가 위 다섯 가지를 실행한다. 모두 통과해야 머지한다. 의존성을 추가할 때는 `uv add <패키지>`로 넣어 `uv.lock`도 함께 커밋한다.
 
+### API 서버
+
+```
+uv run uvicorn --factory cloze.api.app:create_app --reload   # http://localhost:8000/docs 에서 API 문서
+```
+
+상태를 바꾸는 요청(POST·DELETE 등)은 `Origin` 헤더가 `CLOZE_PUBLIC_ORIGIN`(기본 `http://localhost:8000`)일 때만 받는다. curl로 시험할 때는 `-H "Origin: http://localhost:8000"`을 붙인다.
+
+웹 페이지는 `frontend/`에서 `npm run build`로 만든 `frontend/dist/`를 같은 주소(`/`)로 내보낸다. 빌드 전에는 API만 뜬다.
+
 ### DB (PostgreSQL)
 
 [Docker](https://docs.docker.com/get-started/get-docker/)로 내 컴퓨터에 띄운다. 주소는 `config.py` 기본값과 같아서 `.env`에 따로 적지 않아도 된다.
