@@ -79,3 +79,64 @@
 - 정답이 맞는지가 아니라 **칸으로서 좋은지**를 본다. 정답 글자가 틀렸으면(추출 오류) 나쁨이다.
 - 다른 칸 때문에 나빠진 경우(붙어 있는 칸, 같은 줄에 칸이 몰림)는 애매로 두고, 어느 칸이 문제인지 팀에서 따로 모은다.
 - 망설여지면 애매. 애매는 보정 계산에서 좋음·나쁨의 분모에 들어가지 않는다.
+
+## 4. 보정 실행 기록과 증빙
+
+### 입력 고정
+
+[보정 절차](selection-and-quality-gate.md#25-기준값-보정-로드맵-2단계-완료-조건)에 따라
+PDF 세트를 고르고, [1절](#1-시트-만들기)의 명령으로 원본 라벨 시트와 가림 이미지를 만든다.
+같은 PDF를 다시 사용했는지 확인할 수 있도록 비공개 실행 기록에 아래 값을 남긴다.
+
+| 기록 항목 | 기록할 값 |
+|---|---|
+| PDF 세트 | 공개 가능한 내부 별칭, 파일 수, 별칭과 원본 파일명·SHA-256의 비공개 대응표 |
+| 실행 환경 | 코드 커밋 SHA, 해당 커밋의 `uv.lock`, Python 버전 |
+| 추출 및 선택 | 시트의 `extract_version`, 선택기 종류, 실제 사용한 seed와 density |
+| 평가자 및 기준 | 평가자별 별칭, 평가자와 별칭의 비공개 대응표, 평가에 사용한 라벨 가이드 커밋 |
+| 비교 설정 | 지표 열, 제거 비교 연산자, 사용한 순서 그대로의 임계값 후보, 평가에 사용한 명령 |
+
+PowerShell에서 실행 버전과 PDF 해시를 확인할 수 있다. PDF 폴더를 환경 변수로 설정한
+경우의 예시다. 해시 출력은 비공개 실행 기록에만 옮긴다.
+
+```powershell
+git rev-parse HEAD
+git log -1 --format=%H -- docs/design/label-guide.md
+uv run --locked python --version
+Get-ChildItem -LiteralPath $env:CLOZE_SAMPLES_DIR -File |
+    Where-Object Extension -eq '.pdf' |
+    Sort-Object Name |
+    Get-FileHash -Algorithm SHA256
+```
+
+### 라벨 완결성 확인과 후보 비교
+
+독립 라벨링이 끝나면 평가자별 시트에 [1절](#1-시트-만들기)의 검사를 실행한다.
+각 시트에서 `label`·`labeler`가 전부 채워졌는지, 원본과 같은 칸을 한 번씩 평가했는지
+확인한다. 예를 들어 아래 명령에서 차이가 출력되면 보고서를 만들기 전에 누락·추가 행을 확인한다.
+
+```powershell
+$original = Import-Csv -Encoding UTF8 -LiteralPath 'out/labels/rule.csv'
+$rated = Import-Csv -Encoding UTF8 -LiteralPath 'out/labels/rule_evaluator.csv'
+Compare-Object -ReferenceObject @($original) -DifferenceObject @($rated) `
+    -Property file,page,order,extract_version -CaseSensitive
+```
+
+평가자마다 [기존 후보 비교 명령](selection-and-quality-gate.md#25-기준값-보정-로드맵-2단계-완료-조건)을
+같은 지표·연산자·후보로 실행한다. 각 평가자의 보고서를 따로 저장하고, 라벨이 없는 시트나
+일부 칸만 평가한 시트의 결과는 비교에 사용하지 않는다. Gemini 결과 비교는 Issue #43이
+`develop`에 병합되고 같은 PDF 세트와 추출 버전으로 비교용 시트를 만들 수 있을 때 진행한다.
+동일한 평가자와 라벨 기준을 사용하고, 두 선택기에서 의미가 같은 지표만 직접 비교한다.
+
+### 리뷰에 첨부할 집계
+
+PR에는 PDF 세트 별칭·파일 수, 추출 및 실행 설정, 평가자 별칭과 아래 집계만 옮긴다.
+원본 PDF, 파일명·경로·해시, 정답·문맥, 칸별 라벨 및 평가자 실제 이름은 비공개로 보관한다.
+비율에는 제거 수와 전체 수를 함께 적고, 분모가 없으면 보고서의 `N/A`를 유지한다.
+
+| 선택기 | 평가자 별칭 | 지표 | 연산자 | 후보값 | 좋음 전체 | 애매 전체 | 나쁨 전체 | 나쁜 칸 제거 수/전체 및 비율 | 좋은 칸 오제거 수/전체 및 비율 |
+|---|---|---|---|---|---|---|---|---|---|
+| | | | | | | | | | |
+
+실측을 마친 뒤 후보별 나쁜 칸 제거와 좋은 칸 오제거의 차이를 기록한다. 기준값과 선택
+이유는 팀이 합의한 뒤 첨부한다. 실측 자료나 합의가 없으면 결과와 기준값은 미확정으로 표시한다.
