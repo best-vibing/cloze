@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # 다른 워커로 넘어가 두 번 실행된다.
     task_timeout_s: int = 480
     queue_idle_timeout_ms: int = 900_000
+    # 서비스 주소. 상태를 바꾸는 요청은 Origin 헤더가 이 값일 때만 받는다(CSRF 방어).
+    public_origin: str = "http://localhost:8000"
+    # 웹 페이지 빌드 결과 폴더. frontend/ 는 빌드 전 소스라 내보내지 않는다.
+    # 없으면 API만 띄운다.
+    static_dir: Path = Path("frontend/dist")
 
     @model_validator(mode="after")
     def _timeout_below_idle(self) -> "Settings":
