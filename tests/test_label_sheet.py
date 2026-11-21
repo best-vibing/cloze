@@ -8,6 +8,7 @@ import pytest
 
 from cloze.cli.__main__ import main as cli_main
 from cloze.cli.label_sheet import COLUMNS, DENSITY, SEED, check_rows, main
+from cloze.core.extract import EXTRACT_VERSION
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PDFS = ("sample.pdf", "twoup.pdf")
@@ -63,6 +64,20 @@ def test_same_samples_give_same_sheet(samples: Path, tmp_path: Path) -> None:
     assert (tmp_path / "a.csv").read_bytes() == (tmp_path / "b.csv").read_bytes()
 
 
+def test_mixed_language_pdf_with_pages_without_blanks(samples: Path) -> None:
+    for name in PDFS:
+        (samples / name).unlink()
+    shutil.copy(FIXTURES / "korean.pdf", samples)
+    main(["make", "--out", "korean.csv"])
+    _, rows = _read(samples.parent / "korean.csv")
+    assert [(row["file"], row["page"], row["order"]) for row in rows] == [
+        ("korean.pdf", "1", "1"),
+    ]
+    assert "gradient" in rows[0]["context_after"]
+    assert rows[0]["extract_version"] == str(EXTRACT_VERSION)
+    main(["check", "korean.csv"])
+
+
 def test_refuses_to_overwrite_without_force(samples: Path, tmp_path: Path) -> None:
     (tmp_path / "sheet.csv").write_text("labels in progress", encoding="utf-8")
     with pytest.raises(SystemExit, match="--force"):
@@ -79,6 +94,36 @@ def test_missing_samples_dir_prints_guidance(
     with pytest.raises(SystemExit, match="CLOZE_SAMPLES_DIR"):
         main(["make", "--out", "sheet.csv"])
     assert not (tmp_path / "sheet.csv").exists()
+
+
+def test_pdf_directory_is_not_a_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "folder.pdf").mkdir()
+    monkeypatch.setenv("CLOZE_SAMPLES_DIR", str(tmp_path))
+    with pytest.raises(SystemExit, match="PDF가 없다"):
+        main(["make", "--out", str(tmp_path / "sheet.csv")])
+
+
+def test_corrupt_pdf_preserves_existing_sheet(samples: Path, tmp_path: Path) -> None:
+    (samples / "broken.pdf").write_bytes(b"not a PDF")
+    out = tmp_path / "sheet.csv"
+    out.write_bytes(b"saved labels")
+    with pytest.raises(SystemExit, match="broken[.]pdf"):
+        main(["make", "--out", str(out), "--force"])
+    assert out.read_bytes() == b"saved labels"
+
+
+def test_empty_text_is_reported(
+    samples: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("cloze.cli.label_sheet.extract_tokens", lambda _: [])
+    main(["make", "--out", "empty.csv"])
+    assert _read(samples.parent / "empty.csv") == (list(COLUMNS), [])
+    assert "추출된 텍스트가 없다" in capsys.readouterr().err
 
 
 def test_check_accepts_three_labels_and_blank_rows() -> None:

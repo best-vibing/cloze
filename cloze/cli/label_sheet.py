@@ -10,17 +10,23 @@ check: 라벨을 채운 CSV에서 label 값이 좋음 / 애매 / 나쁨 중 하�
 
 import argparse
 import csv
+import math
+import re
 import statistics
 import sys
 from collections import Counter
 from collections.abc import Sequence
+from io import StringIO
 from pathlib import Path
+
+from pdfplumber.utils.exceptions import PdfminerException
 
 from cloze.cli.__main__ import _answers
 from cloze.config import load_settings
 from cloze.core.extract import EXTRACT_VERSION, extract_tokens
 from cloze.core.filter import filter_candidates, word_key
 from cloze.core.models import DEFAULT_DENSITY, PageTokens, Policy, Selection, Token
+from cloze.core.quality_calibration import LABELS
 from cloze.core.select.rule import (
     DocStats,
     bold_signal,
@@ -36,7 +42,6 @@ from cloze.core.select.rule import (
 # 라벨러끼리, 그리고 다시 뽑을 때 결과가 같도록 고정한다. CLI 기본값과 같다.
 SEED = 0
 DENSITY = DEFAULT_DENSITY
-LABELS = ("좋음", "애매", "나쁨")
 # 정답 앞뒤로 보여 줄 토큰 수. 다른 빈칸은 [글자]로 표시한다.
 CONTEXT_TOKENS = 6
 DEFAULT_OUT = Path("out/labels/rule.csv")
@@ -61,6 +66,50 @@ COLUMNS = (
     "label",
     "labeler",
 )
+INTEGER_COLUMNS = (
+    "page",
+    "order",
+    "extract_version",
+    "answer_len",
+    "hangul",
+    "exposure_count",
+    "page_target",
+)
+UNIT_COLUMNS = (
+    "page_survival",
+    "score",
+    "size_signal",
+    "bold_signal",
+    "heading_signal",
+    "frequency_signal",
+)
+
+
+def _integer(column: str, value: str) -> str:
+    """정수 열을 검증하고 같은 숫자를 나타내는 식별자를 정규화한다."""
+    if re.fullmatch(r"[0-9]+", value) is None:
+        raise ValueError(f"{column}: expected a nonnegative integer")
+    number = int(value)
+    minimum = int(column in INTEGER_COLUMNS[:3])
+    maximum = 1 if column == "hangul" else number
+    if not minimum <= number <= maximum:
+        raise ValueError(f"{column}: integer outside permitted range")
+    return str(number)
+
+
+def _numbers(record: dict[str, str]) -> None:
+    """기존 정수 열과 비율·신호 열의 자료형과 범위를 검증한다."""
+    for column in INTEGER_COLUMNS:
+        record[column] = _integer(column, record[column])
+    for column in UNIT_COLUMNS:
+        try:
+            value = float(record[column])
+        except ValueError:
+            raise ValueError(f"{column}: expected a number") from None
+        if not math.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError(f"{column}: expected a finite value in [0, 1]")
+
+
 MISSING_SAMPLES = (
     "CLOZE_SAMPLES_DIR이 비어 있다. 수업 PDF를 둔 폴더를 .env나 환경 변수로 지정한다.\n"
     "예: CLOZE_SAMPLES_DIR=C:/samples (PDF는 레포에 넣지 않는다)"
@@ -92,7 +141,13 @@ def _make(out: Path, force: bool) -> None:
     pdfs = _sample_pdfs(load_settings().samples_dir)
     if out.exists() and not force:
         raise SystemExit(f"{out}이 이미 있다. 채운 라벨을 지키려고 멈춘다(덮어쓰려면 --force).")
-    rows = [row for pdf in pdfs for row in pdf_rows(pdf)]
+    rows: list[Row] = []
+    for pdf in pdfs:
+        try:
+            pdf_result = pdf_rows(pdf)
+        except (OSError, PdfminerException) as error:
+            raise SystemExit(f"{pdf.name}: PDF를 읽을 수 없다: {error}") from None
+        rows.extend(pdf_result)
     out.parent.mkdir(parents=True, exist_ok=True)
     # 엑셀이 한글을 깨뜨리지 않도록 BOM을 붙인다. 읽을 때는 encoding="utf-8-sig"로 연다.
     with out.open("w", encoding="utf-8-sig", newline="") as file:
@@ -107,7 +162,9 @@ def _sample_pdfs(samples_dir: Path | None) -> list[Path]:
         raise SystemExit(MISSING_SAMPLES)
     if not samples_dir.is_dir():
         raise SystemExit(f"CLOZE_SAMPLES_DIR 폴더가 없다: {samples_dir}")
-    pdfs = sorted(path for path in samples_dir.iterdir() if path.suffix.lower() == ".pdf")
+    pdfs = sorted(
+        path for path in samples_dir.iterdir() if path.suffix.lower() == ".pdf" and path.is_file()
+    )
     if not pdfs:
         raise SystemExit(f"CLOZE_SAMPLES_DIR 폴더에 PDF가 없다: {samples_dir}")
     return pdfs
@@ -117,6 +174,9 @@ def pdf_rows(pdf: Path) -> list[Row]:
     """PDF 하나의 빈칸마다 한 줄. order는 cli mask가 쓰는 칸 순서(1부터)와 같다."""
     policy = Policy(preset="concept", density=DENSITY, seed=SEED)
     pages = extract_tokens(pdf.read_bytes())
+    if not any(page.tokens for page in pages):
+        print(f"{pdf.name}: 추출된 텍스트가 없다", file=sys.stderr)
+        return []
     candidates = filter_candidates(pages, policy)
     stats = build_doc_stats(pages, candidates)
     rows: list[Row] = []
@@ -124,6 +184,8 @@ def pdf_rows(pdf: Path) -> list[Row]:
         selection = select_rule(page, page_candidates, policy, set(), stats)
         target = target_count(page, page_candidates, policy)
         rows += _page_rows(pdf.name, page, selection, target, stats)
+    if not rows:
+        print(f"{pdf.name}: 규칙 선택기가 고른 빈칸이 없다", file=sys.stderr)
     return rows
 
 
@@ -184,9 +246,10 @@ def _context(tokens: list[Token], index: int, blank_ids: set[int]) -> tuple[str,
 
 
 def _check(path: Path) -> None:
-    with path.open(encoding="utf-8-sig", newline="") as file:
-        records = list(csv.DictReader(file))
-    problems = check_rows(records)
+    try:
+        records, problems = read_sheet(path.read_text(encoding="utf-8-sig"), completed=False)
+    except (ValueError, OSError) as error:
+        records, problems = [], [str(error)]
     for problem in problems:
         print(problem, file=sys.stderr)
     counts = Counter((record.get("label") or "").strip() for record in records)
@@ -194,6 +257,63 @@ def _check(path: Path) -> None:
     print(f"{len(records)}칸: {summary}, 빈 칸 {counts['']}")
     if problems:
         raise SystemExit(1)
+
+
+def read_sheet(
+    text: str,
+    *,
+    completed: bool,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """기존 시트를 검증한다. 중간 검사에서는 아직 라벨이 없는 행도 허용한다."""
+    reader = csv.DictReader(StringIO(text.removeprefix("\ufeff"), newline=""), strict=True)
+    try:
+        header = reader.fieldnames or []
+        records = list(reader)
+    except csv.Error as error:
+        raise ValueError(f"{reader.line_num}줄: 잘못된 CSV 인용 구문") from error
+    if not all(map(str.strip, header)) or len(set(header)) != len(header):
+        return records, ["비어 있거나 중복된 열 이름 (blank or duplicate header)"]
+    if not completed and set(header) == {"label", "labeler"}:
+        return records, check_rows(records)
+    if not set(COLUMNS) <= set(header):
+        return records, ["필수 열 누락 (missing label-sheet columns)"]
+    return records, check_rows(records) + _check_full_records(records, completed)
+
+
+def _check_full_records(records: list[dict[str, str]], completed: bool) -> list[str]:
+    problems: list[str] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    versions: set[str] = set()
+    for line, record in enumerate(records, start=2):
+        if not all(isinstance(value, str) for value in record.values()):
+            continue  # check_rows reports column count mismatches.
+        try:
+            _check_full_record(record, completed, seen)
+            versions.add(record["extract_version"])
+        except ValueError as error:
+            problems.append(f"{line}줄: {error}")
+    if len(versions) > 1:
+        problems.append("한 시트에 서로 다른 extract_version이 있다. 버전별로 나누어 검사한다.")
+    return problems
+
+
+def _check_full_record(
+    record: dict[str, str],
+    completed: bool,
+    seen: set[tuple[str, str, str, str]],
+) -> None:
+    _numbers(record)
+    for column in ("file", "answer"):
+        if not record[column].strip():
+            raise ValueError(f"Missing {column}")
+    if completed and not record["label"]:
+        raise ValueError("Missing label")
+    record["labeler"] = record["labeler"].strip()
+    if record["label"]:
+        key = (record["labeler"], record["file"], record["page"], record["order"])
+        if key in seen:
+            raise ValueError("Duplicate blank for the same evaluator")
+        seen.add(key)
 
 
 def check_rows(records: list[dict[str, str]]) -> list[str]:
