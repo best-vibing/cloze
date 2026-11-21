@@ -320,6 +320,42 @@ def build_questions_pdf() -> bytes:
     return _build(_twoup_pages(QUESTION_SLIDES))
 
 
+def build_noncontent_pdf() -> bytes:
+    return _build(
+        [
+            (
+                b"",
+                b"",
+                [
+                    (BOLD, 38, 155, 530, "Introduction to AI"),
+                    (REGULAR, 16, 235, 490, "Professor Kim"),
+                ],
+            ),
+            (
+                b"",
+                b"",
+                [
+                    (BOLD, 32, 70, 690, "Table of Contents"),
+                    (REGULAR, 18, 70, 650, "1. Optimization"),
+                    (REGULAR, 18, 70, 620, "2. Regularization"),
+                ],
+            ),
+            (
+                b"",
+                b"",
+                _concept(
+                    680,
+                    "Learning rate",
+                    "Momentum speeds up convergence.",
+                    "A gradient provides the direction of change.",
+                ),
+            ),
+            (b"", b"", []),
+            (b"", b"", [(BOLD, 34, 220, 420, "Thank You")]),
+        ]
+    )
+
+
 def _build(pages: list[PageSpec]) -> bytes:
     # 머리말의 NUL 바이트: git이 이 파일을 이진으로 보게 해 줄바꿈 변환(autocrlf)을 막는다.
     out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\x00\n")
@@ -342,3 +378,4 @@ if __name__ == "__main__":
     Path(__file__).with_name("korean.pdf").write_bytes(build_korean_pdf())
     Path(__file__).with_name("twoup.pdf").write_bytes(build_twoup_pdf())
     Path(__file__).with_name("questions.pdf").write_bytes(build_questions_pdf())
+    Path(__file__).with_name("noncontent.pdf").write_bytes(build_noncontent_pdf())
