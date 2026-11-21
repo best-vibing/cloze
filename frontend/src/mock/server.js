@@ -6,15 +6,29 @@
 //   partial       queued → running → partial (2쪽 처리 실패)
 //   failed        queued → running → failed (unreadable_pdf)
 //   unauthorized  로그인 전 상태. 로그인 외 모든 요청이 401 unauthorized
+//   encrypted_pdf · too_many_pages · daily_limit_exceeded · too_many_running · service_limit_exceeded
+//                 업로드가 그 코드로 거절된다(계약 3절)
+//   lost_response 업로드를 서버는 받았는데 응답이 끊긴다(키마다 처음 한 번). 같은 키로 다시 보내면 같은 세트가 온다
 // 처리 중(queued·running)인 세트에 답안을 내면 어느 시나리오든 409 not_ready다.
+// 확장자가 .pdf가 아니면 415 not_pdf, 20MB를 넘으면 413 file_too_large는 시나리오와 상관없이 낸다.
 // 같은 PDF를 다시 올렸을 때 기존 document_id를 돌려주는 것(계약 2절 POST /documents)은 흉내 내지 않는다.
 
-export const DEMO_SET_ID = "6f1c2a4e-0000-4000-8000-000000000001";
+const DEMO_SET_ID = "6f1c2a4e-0000-4000-8000-000000000001";
 const DEMO_DOCUMENT_ID = "0d0c0000-0000-4000-8000-000000000001";
 const LATENCY_MS = 200;
 const POLLS_UNTIL_FINISHED = 2; // 조회 1번째 queued, 2번째 running, 3번째부터 끝난 상태
 
 const scenario = new URLSearchParams(globalThis.location?.search ?? "").get("scenario") ?? "done";
+
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 서버 설정 기본값(신뢰성 설계 5절)과 같게
+// 시나리오 이름 → 업로드 거절. 문장은 서버가 줄 법한 예시다(화면은 코드로 자기 문장을 고른다).
+const UPLOAD_REJECTIONS = {
+  encrypted_pdf: [422, "암호가 걸렸거나 스크립트가 든 PDF는 올릴 수 없어요."],
+  too_many_pages: [422, "30쪽까지 올릴 수 있어요."],
+  daily_limit_exceeded: [429, "오늘 처리할 수 있는 쪽 수를 넘었어요."],
+  too_many_running: [429, "진행 중인 작업이 너무 많아요."],
+  service_limit_exceeded: [503, "오늘은 더 만들 수 없어요."],
+};
 
 // 정답은 이 안에만 둔다. 조회 응답(getBlankSet)에는 절대 넣지 않는다(D2).
 const ANSWERS = new Map([
@@ -38,6 +52,7 @@ const state = {
   documents: new Map([[DEMO_DOCUMENT_ID, { filename: "세포생물학-3주차.pdf", sets: [DEMO_SET_ID] }]]),
   attempts: new Map(), // attempt_id → {set_id, submitted_at, score, after_reveal, revealed_at}
   idempotency: new Map(), // "경로 키" → {fingerprint: 요청 내용, response: 처음 돌려준 응답}
+  lostKeys: new Set(), // lost_response 시나리오에서 응답을 한 번 끊은 키
 };
 
 const ROUTES = [
@@ -94,14 +109,25 @@ function uploadDocument(init) {
   const preset = init.body.get("preset") ?? "auto";
   // 실패한 요청은 키에 남기지 않는다. 남기면 PDF로 바꿔 같은 키로 다시 올려도 계속 415가 나온다.
   if (!file?.name?.toLowerCase().endsWith(".pdf")) return error(415, "not_pdf", "PDF 파일만 올릴 수 있어요.");
+  if (file.size > MAX_UPLOAD_BYTES) return error(413, "file_too_large", "파일이 너무 커요.");
+  if (scenario in UPLOAD_REJECTIONS) {
+    const [status, message] = UPLOAD_REJECTIONS[scenario];
+    return error(status, scenario, message);
+  }
   // 지문은 Mock이라 파일 이름·크기·방식으로 대신한다(계약의 sha256은 서버 몫).
-  return once(init, "POST /documents", `${file.name}:${file.size}:${preset}`, () => {
+  const response = once(init, "POST /documents", `${file.name}:${file.size}:${preset}`, () => {
     const documentId = crypto.randomUUID();
     const setId = crypto.randomUUID();
     state.sets.set(setId, newSet(documentId, preset));
     state.documents.set(documentId, { filename: file.name, sets: [setId] });
     return reply(202, { document_id: documentId, blank_set_id: setId });
   });
+  const key = init.headers["Idempotency-Key"];
+  if (scenario === "lost_response" && response.ok && !state.lostKeys.has(key)) {
+    state.lostKeys.add(key);
+    throw new TypeError("Failed to fetch"); // fetch가 응답을 못 받았을 때와 같은 오류
+  }
+  return response;
 }
 
 function deleteDocument(_init, documentId) {
