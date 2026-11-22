@@ -197,7 +197,7 @@ def _page_text(tokens: Sequence[AnalysisToken]) -> str:
 
 
 def _document_body_size(pages: Sequence[Sequence[AnalysisToken]]) -> float | None:
-    sizes = []
+    sizes: list[float] = []
     for page in pages:
         line_sizes: dict[int, float] = {}
         for token in page:
