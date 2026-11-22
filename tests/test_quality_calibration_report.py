@@ -73,6 +73,13 @@ def test_bom_quoted_identity_and_no_mutation() -> None:
     assert row == before
 
 
+def test_duplicate_file_with_surrounding_whitespace_rejected() -> None:
+    first = record(file="lecture notes.pdf")
+    second = record(file=" lecture notes.pdf ", label="나쁨")
+    with pytest.raises(ValueError, match="Duplicate"):
+        compare_sheet(sheet(first, second), "score", [0], comparison="<")
+
+
 @pytest.mark.parametrize("page,order", [("1", "1"), ("01", "001")])
 def test_duplicate_identifiers_rejected(page: str, order: str) -> None:
     with pytest.raises(ValueError, match="Duplicate"):

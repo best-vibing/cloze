@@ -310,7 +310,7 @@ def _check_full_record(
         raise ValueError("Missing label")
     record["labeler"] = record["labeler"].strip()
     if record["label"]:
-        key = (record["labeler"], record["file"], record["page"], record["order"])
+        key = (record["labeler"], record["file"].strip(), record["page"], record["order"])
         if key in seen:
             raise ValueError("Duplicate blank for the same evaluator")
         seen.add(key)

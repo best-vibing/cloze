@@ -22,6 +22,7 @@
    ```
 
 6. 입력 중이거나 다 붙였으면 검사한다. 숫자 범위, 추출 버전 혼용, 같은 평가자의 중복 칸도 검사한다.
+   중복 여부를 비교할 때 파일명 앞뒤의 공백은 무시하고, 이름 가운데의 공백은 보존한다.
 
    ```
    uv run python -X utf8 -m cloze.cli.label_sheet check out/labels/rule_<GitHub-id>.csv
