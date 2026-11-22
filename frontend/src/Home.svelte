@@ -1,18 +1,9 @@
 <script>
-  // 처음 화면: PDF 하나와 빈칸 방식을 받아 업로드하고, 받은 세트 화면으로 넘어간다(#35).
+  // 처음 화면: PDF 하나를 받아 업로드하고, 받은 세트 화면으로 넘어간다(#35).
+  // 빈칸 방식은 고르지 않는다. 서버가 자료를 보고 정하도록 preset은 auto로 보낸다(데이터 계약 1절).
   import { uploadDocument } from "./api.js";
   import { LIMITS, beforeSendMessage, canResend, uploadErrorMessage } from "./messages.js";
 
-  // 값과 이름은 데이터 계약 1절 preset.
-  const PRESETS = [
-    ["auto", "자동"],
-    ["concept", "개념 용어"],
-    ["vocab", "어휘 문맥"],
-    ["number", "수치·날짜"],
-    ["definition", "정의"],
-  ];
-
-  let preset = $state("auto");
   let dragging = $state(false);
   let busy = $state(false);
   let problem = $state("");
@@ -30,7 +21,7 @@
     if (!file.name.toLowerCase().endsWith(".pdf")) return (problem = beforeSendMessage("not_pdf"));
     if (file.size > LIMITS.maxMb * 1024 * 1024) return (problem = beforeSendMessage("file_too_large"));
     // 사용자 동작 한 번 = 키 하나(계약 2절 "중복 요청 방지").
-    send({ file, preset, key: crypto.randomUUID() });
+    send({ file, key: crypto.randomUUID() });
   }
 
   async function send(request) {
@@ -38,7 +29,7 @@
     problem = "";
     retry = null;
     try {
-      const { blank_set_id } = await uploadDocument(request.file, request.preset, request.key);
+      const { blank_set_id } = await uploadDocument(request.file, "auto", request.key);
       location.hash = `#/sets/${blank_set_id}`;
     } catch (e) {
       problem = uploadErrorMessage(e);
@@ -98,17 +89,6 @@
         onchange={(e) => pick(e.currentTarget.files)}
       />
       <p class="muted">또는 여기에 PDF 파일을 끌어다 놓기</p>
-
-      <fieldset disabled={busy}>
-        <legend>빈칸 방식</legend>
-        {#each PRESETS as [value, label] (value)}
-          <label class="chip">
-            <input type="radio" name="preset" {value} bind:group={preset} />
-            <span>{label}</span>
-          </label>
-        {/each}
-      </fieldset>
-      {#if preset === "auto"}<p class="muted small">자료를 보고 알맞은 방식을 골라요.</p>{/if}
 
       <p class="muted small">PDF 1개, {LIMITS.maxMb}MB·{LIMITS.maxPages}쪽까지 올릴 수 있어요.</p>
       <!-- 실시간 영역은 글자가 바뀌기 전부터 DOM에 있어야 낭독된다. 비면 :empty로 숨긴다. -->
@@ -183,42 +163,6 @@
   button:disabled {
     opacity: 0.6;
     cursor: wait;
-  }
-  fieldset {
-    border: 0;
-    margin: 20px 0 4px;
-    padding: 0;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 8px;
-  }
-  legend {
-    width: 100%;
-    margin-bottom: 8px;
-    font-weight: 600;
-  }
-  .chip input {
-    position: absolute;
-    opacity: 0;
-  }
-  .chip span {
-    display: inline-block;
-    padding: 6px 14px;
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .chip input:checked + span {
-    background: var(--accent-weak);
-    border-color: var(--accent);
-    color: var(--accent);
-    font-weight: 600;
-  }
-  .chip input:focus-visible + span {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
   }
   .muted {
     color: var(--muted);
