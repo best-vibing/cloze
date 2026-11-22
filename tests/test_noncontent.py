@@ -84,6 +84,15 @@ def test_heading_with_learning_content_is_preserved(title: str, body: str) -> No
     assert any(id_ >= 100 for id_ in result.candidate_ids)
 
 
+def test_first_concept_slide_with_two_short_lines_is_preserved() -> None:
+    cover_like = _page(
+        (0.30, 40, "Gradient Descent"), (0.45, 24, "Learning rate"), (0.52, 24, "Momentum")
+    )
+    next_page = _page((0.10, 30, "Next slide"), page_no=2)
+    candidates = filter_candidates([cover_like, next_page], POLICY)[0]
+    assert 200 in candidates.candidate_ids
+
+
 def test_code_ocr_and_incomplete_text_are_preserved() -> None:
     code = _page((0.42, 36, "END"))
     code.tokens[0].fontname = "Courier"

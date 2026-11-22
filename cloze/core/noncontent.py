@@ -5,6 +5,7 @@ import re
 import unicodedata
 
 from cloze.core.models import PageTokens, Token
+from cloze.core.question_region import slide_boundaries
 
 type Line = list[Token]
 
@@ -21,21 +22,40 @@ _PRESENTER = re.compile(r"(?:professor|prof\.?|instructor|by)\s+.+|.+\s+교수(?
 
 
 def noncontent_ids(
-    page: PageTokens, lines: list[Line], repeated: set[int], *, first: bool, last: bool
+    page: PageTokens,
+    lines: list[Line],
+    repeated: set[int],
+    cover_metadata: set[int],
+    *,
+    first: bool,
+    last: bool,
 ) -> set[int]:
     if page.page.source != "textlayer" or not lines or not 0 < page.page.height_pt < math.inf:
         return set()
     if not all(_reliable(token) for token in page.tokens):
         return set()
-    ordered = sorted((line for line in lines if not _margin(line, page, repeated)), key=_top)
+    ordered = sorted(
+        (line for line in lines if not all(token.id in repeated for token in line)), key=_top
+    )
     if not ordered:
         return set()
-    upper, lower = _split(ordered) if first else (ordered, [])
-    if lower:
-        # For two-up handouts, only infer the opening cover. Other ambiguous layouts stay intact.
-        excluded = upper if _is_cover(upper, page.page.height_pt / 2, 0.5) else []
+    boundaries = slide_boundaries(page, repeated)
+    internal = next((top for top in boundaries if 0.35 <= top <= 0.65), None)
+    if internal is not None:
+        upper = [line for line in ordered if _bottom(line) <= internal]
+        has_lower = any(_top(line) > internal for line in ordered)
+        excluded = (
+            upper
+            if first
+            and has_lower
+            and upper
+            and _is_cover(upper, page.page.height_pt * internal, internal, cover_metadata)
+            else []
+        )
     else:
-        excluded = ordered if _is_noncontent(ordered, page, first=first, last=last) else []
+        excluded = (
+            ordered if _is_noncontent(ordered, page, cover_metadata, first=first, last=last) else []
+        )
     return {token.id for line in excluded for token in line}
 
 
@@ -50,26 +70,9 @@ def _reliable(token: Token) -> bool:
     )
 
 
-def _margin(line: Line, page: PageTokens, repeated: set[int]) -> bool:
-    top = _top(line)
-    in_margin = top <= 0.05 or 0.45 <= top <= 0.55 or top >= 0.90
-    return in_margin and all(
-        token.id in repeated and token.font_size <= 0.015 * page.page.height_pt for token in line
-    )
-
-
-def _split(lines: list[Line]) -> tuple[list[Line], list[Line]]:
-    # Require an empty band spanning the midpoint and a separate title and body below it.
-    upper = [line for line in lines if _bottom(line) <= 0.465]
-    lower = [line for line in lines if _top(line) >= 0.535]
-    if upper and len(lower) >= 2 and len(upper) + len(lower) == len(lines):
-        title, *body = lower
-        if _size(title) >= 1.2 * _size(body[0]) and _top(body[0]) - _bottom(title) <= 0.10:
-            return upper, lower
-    return lines, []
-
-
-def _is_noncontent(lines: list[Line], page: PageTokens, *, first: bool, last: bool) -> bool:
+def _is_noncontent(
+    lines: list[Line], page: PageTokens, cover_metadata: set[int], *, first: bool, last: bool
+) -> bool:
     heading, *body = lines
     marker = _marker(heading)
     prominent = _size(heading) >= 0.026 * page.page.height_pt
@@ -81,10 +84,10 @@ def _is_noncontent(lines: list[Line], page: PageTokens, *, first: bool, last: bo
         return prominent and _top(heading) <= 0.4 and _is_outline(heading, body)
     if marker in ASSIGNMENT:
         return prominent and _is_assignment(heading, body)
-    return first and _is_cover(lines, page.page.height_pt, 1.0)
+    return first and _is_cover(lines, page.page.height_pt, 1.0, cover_metadata)
 
 
-def _is_cover(lines: list[Line], height: float, bottom: float) -> bool:
+def _is_cover(lines: list[Line], height: float, bottom: float, cover_metadata: set[int]) -> bool:
     heading, *details = lines
     marker = _marker(heading)
     if marker in CONTENTS | CLOSING | ASSIGNMENT:
@@ -99,15 +102,16 @@ def _is_cover(lines: list[Line], height: float, bottom: float) -> bool:
         return False
     if marker in COVER:
         return not details and _size(heading) >= 0.026 * height and _short_label(heading)
-    return _inferred_cover(heading, details, height, mixed=bottom == 0.5)
+    return _inferred_cover(heading, details, height, cover_metadata)
 
 
-def _inferred_cover(heading: Line, details: list[Line], height: float, *, mixed: bool) -> bool:
+def _inferred_cover(heading: Line, details: list[Line], height: float, metadata: set[int]) -> bool:
     if len(heading) < 2 or _size(heading) < 0.042 * height:
         return False
-    if mixed and len(details) != 2:
-        return False
-    if len(details) == 1 and not _PRESENTER.fullmatch(_text(details[0])):
+    if not any(
+        _PRESENTER.fullmatch(_text(line)) or all(token.id in metadata for token in line)
+        for line in details
+    ):
         return False
     return _short_label(heading) and all(
         _short_label(line) and _size(line) <= 0.78 * _size(heading) for line in details
@@ -118,7 +122,7 @@ def _cover_alignment(lines: list[Line], bottom: float) -> bool:
     if all(_centered(line) for line in lines):
         return True
     lefts = [min(token.bbox[0] for token in line) for line in lines]
-    return bottom == 0.5 and len(lines) == 3 and max(lefts) - min(lefts) <= 0.04
+    return bottom < 1.0 and len(lines) == 3 and max(lefts) - min(lefts) <= 0.04
 
 
 def _is_outline(heading: Line, body: list[Line]) -> bool:

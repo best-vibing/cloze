@@ -95,8 +95,10 @@ def _document_reasons(pages: list[PageTokens]) -> dict[_Key, ExcludeReason]:
     repeated = _repeated_ids(pages)
     reasons: dict[_Key, ExcludeReason] = dict.fromkeys(repeated, "header_footer")
     phrases = _footer_phrases(pages, repeated)
-    for key in _phrase_ids(pages, phrases):
-        reasons.setdefault(key, "footer_phrase")
+    cover_metadata: dict[int, set[int]] = defaultdict(set)
+    for page_no, token_id in _phrase_ids(pages, phrases):
+        cover_metadata[page_no].add(token_id)
+        reasons.setdefault((page_no, token_id), "footer_phrase")
     for key in question_region_ids(pages, repeated):
         reasons.setdefault(key, "question_region")
     repeated_by_page: dict[int, set[int]] = defaultdict(set)
@@ -107,10 +109,12 @@ def _document_reasons(pages: list[PageTokens]) -> dict[_Key, ExcludeReason]:
             page,
             _line_tokens(page),
             repeated_by_page[page.page.page_no],
+            cover_metadata[page.page.page_no],
             first=index == 0,
             last=index == len(pages) - 1,
         )
-        reasons.update(dict.fromkeys(((page.page.page_no, id_) for id_ in ids), "noncontent"))
+        for id_ in ids:
+            reasons.setdefault((page.page.page_no, id_), "noncontent")
     return reasons
 
 
