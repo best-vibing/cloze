@@ -16,11 +16,13 @@
     partial: "일부 쪽만 완료",
     failed: "만들지 못했어요",
   };
+  const NETWORK = "연결에 문제가 있어요. 잠시 후 다시 시도해 주세요.";
 
   let blankSet = $state(null);
   let problem = $state("");
-  let values = $state({}); // blank_id → 입력. 제출(#36)할 때 이 값을 보낸다.
+  let values = $state({}); // blank_id → 입력. 제출(#36)할 때 이 값을 보낸다. 이미지 주소를 새로 받아도 남는다.
   let hint = $state("");
+  let broken = $state({}); // page_no → true: 새 주소로도 그림을 못 불러온 쪽
 
   const isRunning = (set) => ["queued", "running"].includes(set.status);
   const finished = $derived(blankSet && !isRunning(blankSet));
@@ -28,9 +30,11 @@
     finished && !blankSet.error ? [...blankSet.pages].sort((a, b) => a.page_no - b.page_no) : [],
   );
   const blankCount = $derived(pages.reduce((n, p) => n + p.blanks.length, 0));
-  // Enter 이동 순서: 쪽 순서 → 쪽 안에서 order.
+  // Enter 이동 순서: 쪽 순서 → 쪽 안에서 order. 그림을 못 불러온 쪽의 칸은 그리지 않으니 건너뛴다.
   const order = $derived(
-    pages.flatMap((p) => [...p.blanks].sort((a, b) => a.order - b.order).map((b) => b.blank_id)),
+    pages
+      .filter((p) => !broken[p.page_no])
+      .flatMap((p) => [...p.blanks].sort((a, b) => a.order - b.order).map((b) => b.blank_id)),
   );
 
   onMount(() => {
@@ -45,7 +49,7 @@
         if (!isRunning(blankSet)) return;
       } catch (e) {
         // 서버 문장(message)은 텍스트로만 넣는다. Svelte {…}는 HTML로 해석하지 않는다.
-        problem = e instanceof ApiError ? e.message : "연결에 문제가 있어요. 잠시 후 다시 시도해 주세요.";
+        problem = e instanceof ApiError ? e.message : NETWORK;
         if (e instanceof ApiError && e.status < 500) return; // 401·404는 다시 물어봐도 같다
       }
       if (!stopped) timer = setTimeout(poll, POLL_MS);
@@ -56,6 +60,52 @@
       clearTimeout(timer);
     };
   });
+
+  // ---- 이미지 주소 만료 (계약 2절: 실패하면 세트를 한 번 다시 조회해 새 주소를 받는다) ----
+  // <img>는 실패 이유(만료·없는 파일)를 알려 주지 않는다. 그래서 쪽마다 "새 주소로 한 번 다시"만 하고,
+  // 그 주소로도 실패하면 그 쪽에 오류를 보인다. 성공하면 표시를 지워, 나중에 또 만료돼도 다시 받을 수 있다.
+  const retried = new Set(); // 새 주소를 받은 뒤 아직 성공하지 못한 쪽
+  let refreshing = null; // 진행 중인 재조회. 여러 쪽이 한꺼번에 실패해도 한 번만 묻는다.
+
+  function onimageload(pageNo) {
+    retried.delete(pageNo);
+  }
+
+  function onimageerror(pageNo) {
+    if (retried.has(pageNo)) {
+      broken[pageNo] = true;
+      return;
+    }
+    retried.add(pageNo);
+    refreshImages();
+  }
+
+  /** "다시 불러오기" 버튼. 사용자가 누를 때만 다시 시도하므로 무한히 반복되지 않는다. */
+  function onretry(pageNo) {
+    delete broken[pageNo];
+    retried.add(pageNo);
+    refreshImages();
+  }
+
+  function refreshImages() {
+    refreshing ??= (async () => {
+      const before = new Map(pages.map((p) => [p.page_no, p.image_url]));
+      try {
+        const set = await getBlankSet(setId);
+        // 끝난 세트가 다시 처리 중이 될 일은 없지만, 그렇게 오면 지금 그림을 지우지 않고 그대로 둔다.
+        if (!isRunning(set)) blankSet = set;
+        problem = "";
+      } catch (e) {
+        problem = e instanceof ApiError ? e.message : NETWORK;
+      }
+      // 주소가 그대로이거나 쪽이 사라졌으면 <img>가 다시 받지 않으므로, 기다리지 않고 바로 오류로 보인다.
+      for (const pageNo of retried) {
+        const now = pages.find((p) => p.page_no === pageNo);
+        if (!now || now.image_url === before.get(pageNo)) broken[pageNo] = true;
+      }
+      refreshing = null;
+    })();
+  }
 
   /** Enter는 다음 칸, Shift+Enter는 이전 칸. Tab은 브라우저가 DOM 순서(= order)로 옮긴다. 조합 중 Enter·Tab은 막는다. */
   function onkeydown(event, blankId) {
@@ -106,7 +156,16 @@
 {#if pages.length}
   <div class="pages">
     {#each pages as page (page.page_no)}
-      <BlankPage {page} bind:values {onkeydown} {onfocus} />
+      <BlankPage
+        {page}
+        bind:values
+        broken={broken[page.page_no] ?? false}
+        {onkeydown}
+        {onfocus}
+        {onimageload}
+        {onimageerror}
+        {onretry}
+      />
     {/each}
   </div>
   <footer class="hint">
