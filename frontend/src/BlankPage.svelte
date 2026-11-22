@@ -1,14 +1,51 @@
 <script>
   // 쪽 하나: 가린 이미지 위에 빈칸 입력칸을 겹친다. 규칙은 채점·입력칸 설계 3.2, 코드는 스파이크(#57) Page.svelte에서 옮겼다.
   // 서버가 준 글자(hint 등)는 Svelte {…}로만 넣는다. {…}는 HTML로 해석하지 않는다.
-  let { page, values = $bindable(), broken, onkeydown, onfocus, onimageload, onimageerror, onretry } = $props();
+  // 제출(#36) 뒤에는 results(blank_id → correct·near·wrong)로 칸을 표시하고 고치지 못하게 한다.
+  // showAnswers면 이미지를 다시 받지 않고 칸 자리에 정답 글자(answers)를 그린다(설계 3.2 정답 공개).
+  let {
+    page,
+    values = $bindable(),
+    results = null,
+    answers = null,
+    showAnswers = false,
+    broken,
+    onkeydown,
+    onfocus,
+    onimageload,
+    onimageerror,
+    onretry,
+  } = $props();
 
   const MAX_GROW = 3; // 입력이 길어질 때 bbox 폭의 최대 몇 배까지 늘릴지
+  const RESULT_LABEL = { correct: "맞음", near: "거의 맞음", wrong: "틀림" };
   const measure = document.createElement("canvas").getContext("2d");
   let widths = $state({}); // blank_id → 입력에 맞춰 늘어난 폭(cqw)
 
   // Tab은 DOM 순서로 움직이므로, 칸을 order(읽는 순서) 순서로 그린다.
   const blanks = $derived([...page.blanks].sort((a, b) => a.order - b.order));
+  const revealed = $derived(showAnswers && answers !== null);
+
+  /** 칸에 보일 글자. 정답을 보는 중이면 정답, 아니면 내 입력. */
+  const shown = (id) => (revealed ? (answers[id] ?? "") : (values[id] ?? ""));
+
+  /**
+   * 칸 폭(cqw). 정답은 원래 그 자리(bbox)에 있던 글자라 bbox 폭에 맞는다.
+   * 내 입력은 늘어난 폭을 쓰되, 다시 풀기로 입력이 비면 bbox 폭으로 돌아간다.
+   */
+  function widthOf(blank) {
+    const base = (blank.bbox[2] - blank.bbox[0]) * 100;
+    if (revealed || !values[blank.blank_id]) return base;
+    return widths[blank.blank_id] ?? base;
+  }
+
+  function labelOf(blank) {
+    const result = results?.[blank.blank_id];
+    const parts = [`페이지 ${page.page_no}, 빈칸 ${blank.order}`];
+    if (result) parts.push(RESULT_LABEL[result]);
+    if (revealed) parts.push("정답 표시 중");
+    return parts.join(", ");
+  }
 
   /** 정답 길이를 드러내지 않도록 폭은 bbox 폭에서 시작하고, 입력 글자 폭에 맞춰서만 늘린다. */
   function grow(event, blank) {
@@ -46,7 +83,7 @@
   {:else}
     <!-- 그림이 없는 쪽에서는 입력칸을 그리지 않는다. 입력한 값은 부모(values)에 남아 다시 불러오면 돌아온다. -->
     {#each blanks as blank (blank.blank_id)}
-      {@const [x0, y0, x1, y1] = blank.bbox}
+      {@const [x0, y0, , y1] = blank.bbox}
       <input
         id="blank-{blank.blank_id}"
         class="blank"
@@ -54,15 +91,18 @@
         autocomplete="off"
         autocapitalize="off"
         spellcheck="false"
-        aria-label="페이지 {page.page_no}, 빈칸 {blank.order}"
+        aria-label={labelOf(blank)}
+        aria-invalid={results?.[blank.blank_id] === "wrong"}
+        readonly={results !== null}
+        data-result={results?.[blank.blank_id]}
         style:left="{x0 * 100}%"
         style:top="{y0 * 100}%"
         style:height="{(y1 - y0) * 100}%"
-        style:width="{widths[blank.blank_id] ?? (x1 - x0) * 100}cqw"
+        style:width="{widthOf(blank)}cqw"
         style:--font-ratio={blank.style.font_size_ratio}
         style:--font-color={blank.style.font_color}
         style:--bg-color={blank.style.bg_color}
-        bind:value={values[blank.blank_id]}
+        bind:value={() => shown(blank.blank_id), (v) => (values[blank.blank_id] = v)}
         oninput={(e) => grow(e, blank)}
         onkeydown={(e) => onkeydown(e, blank.blank_id)}
         onfocus={() => onfocus(blank)}
@@ -107,6 +147,20 @@
     z-index: 1;
     border-bottom-color: var(--accent);
     box-shadow: -3px 0 0 var(--accent), 0 2px 8px rgb(0 0 0 / 0.25);
+  }
+  /* 채점 결과. 색만으로 구분하지 않도록 밑줄 모양도 다르게 한다(실선·점선·이중선). */
+  .blank[data-result] {
+    border-bottom-width: 2px;
+    cursor: default;
+  }
+  .blank[data-result="correct"] {
+    border-bottom: 2px solid var(--correct);
+  }
+  .blank[data-result="near"] {
+    border-bottom: 2px dashed var(--near);
+  }
+  .blank[data-result="wrong"] {
+    border-bottom: 3px double var(--danger);
   }
   .broken {
     position: absolute;

@@ -1,5 +1,5 @@
-// 업로드 오류 문구. 서버가 거절한 코드(계약 3절)는 서버 message를 그대로 쓴다. 실제 한도 값을 아는 쪽이 서버라서다.
-// 화면 문구는 보내기 전에 화면이 직접 거르는 경우와 응답을 받지 못한 경우에만 쓴다.
+// 오류 문구(업로드, 답안 제출·정답 공개). 서버가 거절한 코드(계약 3절)는 서버 message를 그대로 쓴다.
+// 실제 한도 값을 아는 쪽이 서버라서다. 화면 문구는 보내기 전에 화면이 직접 거르는 경우와 응답을 받지 못한 경우에만 쓴다.
 import { ApiError } from "./api.js";
 
 // 한도 값은 서버 설정 Settings.upload_max_bytes·upload_max_pages(#101, 신뢰성 설계 5절 [가설])가 기준이다.
@@ -24,9 +24,15 @@ export function canResend(error) {
   return error.status >= 500 && error.code !== "service_limit_exceeded";
 }
 
-/** 업로드 오류 → 화면 문장. */
-export function uploadErrorMessage(error) {
-  if (!(error instanceof ApiError)) return "연결이 끊겨 결과를 받지 못했어요. 다시 보내 주세요.";
-  if (canResend(error)) return "서버에서 결과를 받지 못했어요. 다시 보내 주세요.";
+/** 요청 오류 → 화면 문장. 응답을 받지 못했으면 again(다시 할 일)을 붙이고, 서버가 거절했으면 서버 문장을 쓴다. */
+function requestErrorMessage(error, again) {
+  if (!(error instanceof ApiError)) return `연결이 끊겨 결과를 받지 못했어요. ${again}`;
+  if (canResend(error)) return `서버에서 결과를 받지 못했어요. ${again}`;
   return error.message;
 }
+
+/** 업로드 오류 → 화면 문장. */
+export const uploadErrorMessage = (error) => requestErrorMessage(error, "다시 보내 주세요.");
+
+/** 답안 제출·정답 공개 오류 → 화면 문장. */
+export const attemptErrorMessage = (error) => requestErrorMessage(error, "다시 눌러 주세요.");

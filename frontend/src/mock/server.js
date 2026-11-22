@@ -12,6 +12,8 @@
 //   gateway_timeout 업로드를 서버는 받았는데 프록시가 본문 없는 504를 준다(키마다 처음 한 번). 다시 보내면 같은 세트
 //   image_expired 끝난 세트를 처음 조회했을 때 받은 이미지 주소가 열리지 않는다(만료). 다시 조회하면 새 주소가 열린다
 //   image_missing 이미지 주소가 늘 열리지 않는다. 화면은 한 번 다시 조회한 뒤 쪽마다 오류를 보인다
+//   attempt_lost  세트마다 첫 답안 제출과 시도마다 첫 정답 공개가, 서버는 처리했는데 응답이 끊긴다. 다시 누르면 된다
+//   session_expired 풀이 화면까지는 되고, 답안 제출과 정답 공개만 401 unauthorized(로그인이 풀린 경우)
 // 처리 중(queued·running)인 세트에 답안을 내면 어느 시나리오든 409 not_ready다.
 // 확장자가 .pdf가 아니면 415 not_pdf, 20MB를 넘으면 413 file_too_large는 시나리오와 상관없이 낸다.
 // 같은 PDF를 다시 올렸을 때 기존 document_id를 돌려주는 것(계약 2절 POST /documents)은 흉내 내지 않는다.
@@ -59,7 +61,7 @@ const state = {
   documents: new Map([[DEMO_DOCUMENT_ID, { filename: "세포생물학-3주차.pdf", sets: [DEMO_SET_ID] }]]),
   attempts: new Map(), // attempt_id → {set_id, submitted_at, score, after_reveal, revealed_at}
   idempotency: new Map(), // "경로 키" → {fingerprint: 요청 내용, response: 처음 돌려준 응답}
-  lostKeys: new Set(), // lost_response·gateway_timeout 시나리오에서 응답을 한 번 끊은 키
+  lostKeys: new Set(), // lost_response·gateway_timeout·attempt_lost 시나리오에서 응답을 한 번 끊은 키·요청
 };
 
 const ROUTES = [
@@ -187,6 +189,8 @@ function getBlankSet(_init, setId) {
 }
 
 function submitAttempt(init, setId) {
+  // 실제 서버처럼 로그인 확인을 404·409보다 먼저 한다.
+  if (scenario === "session_expired") return sessionExpired();
   const set = state.sets.get(setId);
   if (!set) return notFound();
   if (["queued", "running"].includes(statusOf(set))) {
@@ -194,10 +198,9 @@ function submitAttempt(init, setId) {
   }
   const { answers } = JSON.parse(init.body);
   const blankIds = shownBlankIds(set);
-  // 화면 시험용 가짜 채점: 대소문자·앞뒤 공백만 무시한다. 진짜 판정은 서버 cloze/core/grade(#55)가 기준이다.
-  const results = Object.fromEntries(
-    blankIds.map((id) => [id, same(answers[id] ?? "", ANSWERS.get(id)) ? "correct" : "wrong"]),
-  );
+  // 화면 시험용 가짜 채점: 대소문자·앞뒤 공백만 무시하고, 5자 이상 정답에서 한 글자 차이는 near다.
+  // 진짜 판정은 서버 cloze/core/grade(#55)가 기준이다.
+  const results = Object.fromEntries(blankIds.map((id) => [id, judge(answers[id] ?? "", ANSWERS.get(id))]));
   const correct = Object.values(results).filter((r) => r === "correct").length;
   const attempt = {
     attempt_id: crypto.randomUUID(),
@@ -208,6 +211,8 @@ function submitAttempt(init, setId) {
     revealed_at: null,
   };
   state.attempts.set(attempt.attempt_id, attempt);
+  // 시도는 저장했는데 응답이 끊긴 경우. 다시 내면 시도가 하나 더 생긴다(계약상 제출에는 Idempotency-Key가 없다).
+  if (cutOnce(`submit ${setId}`)) throw new TypeError("Failed to fetch");
   const { attempt_id, score, after_reveal } = attempt;
   return reply(200, { attempt_id, results, score, after_reveal });
 }
@@ -223,11 +228,14 @@ function listAttempts(_init, setId) {
 }
 
 function revealAttempt(_init, attemptId) {
+  if (scenario === "session_expired") return sessionExpired();
   const attempt = state.attempts.get(attemptId);
   if (!attempt) return notFound();
   const set = state.sets.get(attempt.set_id);
+  if (!set) return notFound(); // 문서를 지워 세트가 사라졌다
   attempt.revealed_at ??= new Date().toISOString();
   set.revealed = true; // 이후 시도는 after_reveal: true
+  if (cutOnce(`reveal ${attemptId}`)) throw new TypeError("Failed to fetch");
   const answers = Object.fromEntries(shownBlankIds(set).map((id) => [id, ANSWERS.get(id)]));
   return reply(200, { answers });
 }
@@ -291,9 +299,29 @@ function shownBlankIds(set) {
   return pages.flatMap((p) => p.blanks.map((b) => b.blank_id));
 }
 
-function same(given, answer) {
+function judge(given, answer) {
   const norm = (s) => s.normalize("NFKC").trim().toLowerCase();
-  return norm(given) !== "" && norm(given) === norm(answer);
+  const [a, b] = [norm(given), norm(answer)];
+  if (a === "") return "wrong";
+  if (a === b) return "correct";
+  return b.length >= 5 && withinOneEdit(a, b) ? "near" : "wrong";
+}
+
+/** 글자 하나를 바꾸거나 넣거나 빼서 같아지는가(편집 거리 1). */
+function withinOneEdit(a, b) {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+  const rest = (x, skip) => x.slice(i + skip);
+  if (a.length === b.length) return rest(a, 1) === rest(b, 1);
+  return a.length > b.length ? rest(a, 1) === rest(b, 0) : rest(a, 0) === rest(b, 1);
+}
+
+/** attempt_lost 시나리오에서 이 이름의 요청을 처음 한 번만 끊는다. */
+function cutOnce(name) {
+  if (scenario !== "attempt_lost" || state.lostKeys.has(name)) return false;
+  state.lostKeys.add(name);
+  return true;
 }
 
 /**
@@ -325,4 +353,8 @@ function error(status, code, message) {
 
 function notFound() {
   return error(404, "not_found", "찾을 수 없어요.");
+}
+
+function sessionExpired() {
+  return error(401, "unauthorized", "로그인이 필요해요.");
 }
