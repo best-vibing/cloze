@@ -51,7 +51,8 @@
 <svelte:window ondragover={(e) => e.preventDefault()} ondrop={(e) => e.preventDefault()} />
 
 <header>
-  <a class="logo" href="#/">Cloze</a>
+  <!-- 로고 원본의 비율을 지키려고 높이만 정한다. 폭은 그림 비율대로 따라온다. -->
+  <a class="logo" href="#/"><img src="/logo.webp" alt="Cloze" height="40" /></a>
 </header>
 
 <main>
@@ -102,13 +103,15 @@
 
 <style>
   header {
-    padding: 14px 24px;
+    padding: 12px 16px;
   }
   .logo {
-    font-weight: 700;
-    font-size: 20px;
-    color: var(--accent);
-    text-decoration: none;
+    display: inline-block;
+  }
+  .logo img {
+    display: block;
+    height: 40px;
+    width: auto;
   }
   main {
     max-width: 880px;
