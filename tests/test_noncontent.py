@@ -33,7 +33,7 @@ def _page(*lines: tuple[float, float, str], page_no: int = 1) -> PageTokens:
 
 @pytest.mark.parametrize(
     "title",
-    ["End", "The End", "Thank You", "Thanks", "감사합니다", "수고하셨습니다", "Q & A"],
+    ["End", "The End", "Thank You", "Thanks", "감사합니다", "수고하셨습니다"],
 )
 def test_closing_requires_final_position(title: str) -> None:
     page = _page((0.42, 36, title))
@@ -45,22 +45,22 @@ def test_closing_requires_final_position(title: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "lines",
+    ("lines", "excluded"),
     [
-        [(0.3, 38, "Cover")],
-        [(0.2, 35, "목차"), (0.29, 18, "1. 신경망"), (0.33, 18, "2. Regularization")],
-        [(0.2, 35, "Homework"), (0.29, 18, "Due: Friday"), (0.33, 18, "Submit via: LMS")],
-        [(0.3, 35, "과제 안내"), (0.38, 18, "제출 기한: 금요일")],
+        ([(0.3, 38, "Cover")], True),
+        ([(0.2, 35, "목차"), (0.29, 18, "1. 신경망"), (0.33, 18, "2. Regularization")], False),
+        ([(0.2, 35, "Homework"), (0.29, 18, "Due: Friday"), (0.33, 18, "Submit via: LMS")], False),
+        ([(0.3, 35, "과제 안내"), (0.38, 18, "제출 기한: 금요일")], False),
     ],
 )
-def test_nonlearning_layouts(lines: list[tuple[float, float, str]]) -> None:
+def test_only_cover_is_excluded(lines: list[tuple[float, float, str]], excluded: bool) -> None:
     page = _page(*lines)
     original = page.model_copy(deep=True)
     first = filter_candidates([page], POLICY)
     assert first == filter_candidates([page], POLICY)
     assert page == original
-    assert not first[0].candidate_ids
-    assert {item.reason for item in first[0].excluded} == {"noncontent"}
+    assert ("noncontent" in {item.reason for item in first[0].excluded}) == excluded
+    assert bool(first[0].candidate_ids) != excluded
 
 
 @pytest.mark.parametrize(
@@ -93,6 +93,30 @@ def test_first_concept_slide_with_two_short_lines_is_preserved() -> None:
     assert 200 in candidates.candidate_ids
 
 
+def test_cover_without_middle_footer_preserves_lower_learning_slide() -> None:
+    page = _page(
+        (0.20, 27, "Probability and Statistics"),
+        (0.26, 18, "Estimation"),
+        (0.57, 18, "Sampling and Sample"),
+        (0.63, 14, "Random sampling selects elements"),
+        (0.69, 14, "Independently from a population"),
+    )
+    result = filter_candidates([page], POLICY)[0]
+    assert 100 in {item.id for item in result.excluded if item.reason == "noncontent"}
+    assert any(token_id >= 200 for token_id in result.candidate_ids)
+
+
+def test_final_end_excludes_only_lower_slide() -> None:
+    page = _page(
+        (0.15, 32, "Sampling"),
+        (0.24, 18, "Random sampling selects elements"),
+        (0.73, 32, "End"),
+    )
+    result = filter_candidates([page], POLICY)[0]
+    assert {item.id for item in result.excluded if item.reason == "noncontent"} == {200}
+    assert any(token_id < 200 for token_id in result.candidate_ids)
+
+
 def test_code_ocr_and_incomplete_text_are_preserved() -> None:
     code = _page((0.42, 36, "END"))
     code.tokens[0].fontname = "Courier"
@@ -113,7 +137,7 @@ def test_ambiguous_lower_block_keeps_cover_and_learning_tokens() -> None:
 @pytest.mark.parametrize(
     "fixture, unmasked, learning",
     [
-        ("noncontent.pdf", (1, 2, 4, 5), 3),
+        ("noncontent.pdf", (1, 5), 3),
         ("twoup.pdf", (), 1),
     ],
 )

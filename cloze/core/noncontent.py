@@ -10,15 +10,9 @@ from cloze.core.question_region import slide_boundaries
 type Line = list[Token]
 
 COVER = {"cover", "title slide", "표지"}
-CONTENTS = {"contents", "table of contents", "agenda", "목차"}
-CLOSING = {"end", "the end", "thank you", "thanks", "감사합니다", "수고하셨습니다", "q&a"}
-ASSIGNMENT = {"homework", "assignment", "과제", "과제 안내"}
-_ADMIN = re.compile(
-    r"(?:due|deadline|submit (?:via|on|to)|제출 기한|제출 마감|제출 방법)(?:\s*:.*)"
-)
-_ENTRY_PREFIX = re.compile(r"^(?:[•·▪–-]\s*|\d+[.)]\s+)")
+CLOSING = {"end", "the end", "thank you", "thanks", "감사합니다", "수고하셨습니다"}
 _PROSE_OR_CODE = re.compile(r"[;=:{}/!?]|[.!?]$")
-_PRESENTER = re.compile(r"(?:professor|prof\.?|instructor|by)\s+.+|.+\s+교수(?:님)?")
+_PRESENTER = re.compile(r"(?:professor|prof\.?|instructor|by)[ :]+.+|.+\s+교수(?:님)?")
 
 
 def noncontent_ids(
@@ -30,33 +24,39 @@ def noncontent_ids(
     first: bool,
     last: bool,
 ) -> set[int]:
-    if page.page.source != "textlayer" or not lines or not 0 < page.page.height_pt < math.inf:
-        return set()
-    if not all(_reliable(token) for token in page.tokens):
+    if not (first or last) or page.page.source != "textlayer" or page.page.height_pt <= 0:
         return set()
     ordered = sorted(
         (line for line in lines if not all(token.id in repeated for token in line)), key=_top
     )
-    if not ordered:
-        return set()
-    boundaries = slide_boundaries(page, repeated)
-    internal = next((top for top in boundaries if 0.35 <= top <= 0.65), None)
-    if internal is not None:
-        upper = [line for line in ordered if _bottom(line) <= internal]
-        has_lower = any(_top(line) > internal for line in ordered)
-        excluded = (
-            upper
-            if first
-            and has_lower
-            and upper
-            and _is_cover(upper, page.page.height_pt * internal, internal, cover_metadata)
-            else []
-        )
-    else:
-        excluded = (
-            ordered if _is_noncontent(ordered, page, cover_metadata, first=first, last=last) else []
-        )
+    if first and _is_cover(ordered, page.page.height_pt, cover_metadata, mixed=False):
+        return {token.id for line in ordered for token in line}
+    upper, lower = _split(page, ordered, repeated)
+    excluded = []
+    if (
+        first
+        and len(lower) >= 2
+        and _is_cover(upper, page.page.height_pt, cover_metadata, mixed=True)
+    ):
+        excluded.extend(upper)
+    if last and _is_closing(lower or upper, page.page.height_pt, mixed=bool(lower)):
+        excluded.extend(lower or upper)
     return {token.id for line in excluded for token in line}
+
+
+def _split(
+    page: PageTokens, lines: list[Line], repeated: set[int]
+) -> tuple[list[Line], list[Line]]:
+    boundary = next((top for top in slide_boundaries(page, repeated) if 0.35 <= top <= 0.65), None)
+    if boundary is None:
+        boundary = 0.5
+        if not all(_bottom(line) <= 0.46 or _top(line) >= 0.54 for line in lines):
+            return lines, []
+    upper = [line for line in lines if _bottom(line) <= boundary]
+    lower = [line for line in lines if _top(line) > boundary]
+    if upper and lower and len(upper) + len(lower) == len(lines):
+        return upper, lower
+    return lines, []
 
 
 def _reliable(token: Token) -> bool:
@@ -70,86 +70,62 @@ def _reliable(token: Token) -> bool:
     )
 
 
-def _is_noncontent(
-    lines: list[Line], page: PageTokens, cover_metadata: set[int], *, first: bool, last: bool
-) -> bool:
-    heading, *body = lines
-    marker = _marker(heading)
-    prominent = _size(heading) >= 0.026 * page.page.height_pt
-    if _code_font(heading):
+def _is_closing(lines: list[Line], height: float, *, mixed: bool) -> bool:
+    if len(lines) != 1:
         return False
-    if last and marker in CLOSING:
-        return not body and prominent and _centered(heading) and 0.20 <= _top(heading) <= 0.78
-    if marker in CONTENTS:
-        return prominent and _top(heading) <= 0.4 and _is_outline(heading, body)
-    if marker in ASSIGNMENT:
-        return prominent and _is_assignment(heading, body)
-    return first and _is_cover(lines, page.page.height_pt, 1.0, cover_metadata)
+    line = lines[0]
+    return (
+        all(map(_reliable, line))
+        and _marker(line) in CLOSING
+        and not _code_font(line)
+        and _centered(line)
+        and _size(line) >= 0.026 * height * (0.5 if mixed else 1.0)
+    )
 
 
-def _is_cover(lines: list[Line], height: float, bottom: float, cover_metadata: set[int]) -> bool:
-    heading, *details = lines
-    marker = _marker(heading)
-    if marker in CONTENTS | CLOSING | ASSIGNMENT:
+def _is_cover(lines: list[Line], height: float, metadata: set[int], *, mixed: bool) -> bool:
+    if not lines or not all(_reliable(token) for line in lines for token in line):
         return False
-    if len(details) > 2 or sum(map(len, lines)) > 20:
-        return False
-    if not 0.12 * bottom <= _top(heading) <= 0.68 * bottom:
-        return False
-    if _bottom(lines[-1]) - _top(heading) > 0.28 * bottom:
-        return False
-    if not _cover_alignment(lines, bottom):
-        return False
-    if marker in COVER:
-        return not details and _size(heading) >= 0.026 * height and _short_label(heading)
-    return _inferred_cover(heading, details, height, cover_metadata)
+    heading = max(lines, key=_size)
+    region_height = height * (0.5 if mixed else 1.0)
+    if _marker(heading) in COVER:
+        return len(lines) == 1 and _centered(heading) and _size(heading) >= 0.026 * region_height
+    details = [line for line in lines if line is not heading]
+    return (
+        _size(heading) >= 0.042 * region_height
+        and _short_label(heading)
+        and (not mixed or len(details) <= 2 or all(_centered(line) for line in lines))
+        and 1 <= len(details) <= 6
+        and all(_cover_detail(line, heading) for line in details)
+        and _cover_evidence(heading, details, metadata, mixed=mixed)
+    )
 
 
-def _inferred_cover(heading: Line, details: list[Line], height: float, metadata: set[int]) -> bool:
-    if len(heading) < 2 or _size(heading) < 0.042 * height:
-        return False
-    if not any(
+def _cover_evidence(heading: Line, details: list[Line], metadata: set[int], *, mixed: bool) -> bool:
+    if any(
         _PRESENTER.fullmatch(_text(line)) or all(token.id in metadata for token in line)
         for line in details
     ):
-        return False
-    return _short_label(heading) and all(
-        _short_label(line) and _size(line) <= 0.78 * _size(heading) for line in details
-    )
-
-
-def _cover_alignment(lines: list[Line], bottom: float) -> bool:
-    if all(_centered(line) for line in lines):
         return True
-    lefts = [min(token.bbox[0] for token in line) for line in lines]
-    return bottom < 1.0 and len(lines) == 3 and max(lefts) - min(lefts) <= 0.04
-
-
-def _is_outline(heading: Line, body: list[Line]) -> bool:
-    if not body:
-        return _centered(heading)
-    if not 2 <= len(body) <= 10 or not all(_short_label(line) for line in body):
-        return False
-    return all(
-        _size(line) <= 0.86 * _size(heading) and _top(line) - _bottom(previous) <= 0.13
-        for previous, line in zip([heading, *body[:-1]], body, strict=True)
+    return (
+        mixed
+        and len(heading) >= 2
+        and len(details) == 1
+        and _centered(heading)
+        and _centered(details[0])
+        and _top(details[0]) - _bottom(heading) <= 0.10
+        and _top(details[0]) >= _bottom(heading)
     )
 
 
-def _is_assignment(heading: Line, body: list[Line]) -> bool:
-    if not body:
-        return _centered(heading) or _top(heading) <= 0.35
-    return len(body) <= 3 and all(
-        _ADMIN.fullmatch(_ENTRY_PREFIX.sub("", _text(line)))
-        and len(_text(line).split(":", 1)[1].split()) <= 4
-        and not _PROSE_OR_CODE.search(_text(line).split(":", 1)[1].strip())
-        and _size(line) <= 0.86 * _size(heading)
-        for line in body
+def _cover_detail(line: Line, heading: Line) -> bool:
+    return _size(line) <= 0.78 * _size(heading) and (
+        _short_label(line) or bool(_PRESENTER.fullmatch(_text(line)))
     )
 
 
 def _short_label(line: Line) -> bool:
-    label = _ENTRY_PREFIX.sub("", _text(line))
+    label = _text(line)
     return (
         0 < len(label.split()) <= 9
         and len(label) <= 85
