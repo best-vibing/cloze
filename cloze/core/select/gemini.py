@@ -92,6 +92,7 @@ def _prompt(
     minimum: int,
     maximum: int,
     retry: RetryFeedback | None,
+    reused_ids: list[int],
 ) -> str:
     lines: dict[int, list[str]] = defaultdict(list)
     for token in page.tokens:
@@ -111,6 +112,8 @@ def _prompt(
         '응답 형식: {"blanks":[{"token_ids":[정수 ID],"type":"term","hint":null,'
         '"variants":[]}]} (type: text, number, term).\n'
     )
+    if reused_ids:
+        instructions += f"이전에 쓴 후보 {reused_ids}는 가능한 한 피하고, 부족할 때만 고른다.\n"
     if retry is not None:
         instructions += f"재시도 자료(JSON): {json.dumps(retry, ensure_ascii=False)}\n"
     return f"{instructions}[페이지 {page.page.page_no}]\n{source}"
@@ -185,7 +188,7 @@ async def select_gemini(
     """
     if page.page.page_no != candidates.page_no or not math.isfinite(policy.density):
         raise ValueError("Expected matching pages and finite density")
-    ids = set(candidates.candidate_ids) - avoid
+    ids = set(candidates.candidate_ids)
     allowed = {
         token.id: token
         for token in page.tokens
@@ -195,6 +198,10 @@ async def select_gemini(
     if maximum <= 0:
         return Selection(spans=[], slots=[], source="gemini")
     minimum = math.ceil(maximum * 0.6)
-    prompt = _prompt(page, allowed, policy, minimum, maximum, retry)
+    fresh = {token_id: token for token_id, token in allowed.items() if token_id not in avoid}
+    if len(fresh) >= maximum:
+        allowed = fresh
+    reused_ids = sorted(allowed.keys() & avoid)
+    prompt = _prompt(page, allowed, policy, minimum, maximum, retry, reused_ids)
     result = await ask_llm(prompt, _SCHEMA, seed=policy.seed, temperature=0.3)
     return _parse(result, allowed, minimum, maximum)

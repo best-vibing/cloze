@@ -28,7 +28,7 @@ class Policy(BaseModel):
     preset: Literal["auto", "vocab", "concept", "number", "definition"] = "auto"
     density: float = Field(default=DEFAULT_DENSITY, ge=0)
     language: Literal["auto", "en", "ko"] = "auto"
-    include_numbers: bool = False
+    include_numbers: bool = Field(default_factory=lambda data: data["preset"] == "number")
     seed: int
 
 

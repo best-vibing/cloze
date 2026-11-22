@@ -7,7 +7,6 @@ import secrets
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass
-from functools import partial
 from time import monotonic
 from typing import Any, Literal, NoReturn, Protocol, cast
 
@@ -57,7 +56,13 @@ class GeminiTransport(Protocol):
     """실제 SDK와 오프라인 테스트가 공유하는 전송 경계."""
 
     async def generate(
-        self, prompt: str, schema: JSONObject, image: Image | None
+        self,
+        prompt: str,
+        schema: JSONObject,
+        image: Image | None,
+        *,
+        seed: int | None = None,
+        temperature: float | None = None,
     ) -> GeminiResponse | str:
         """텍스트와 사용량을 반환한다. 기존 문자열 전송도 지원한다."""
         ...
@@ -73,34 +78,6 @@ class GeminiTokenTransport(GeminiTransport, Protocol):
     async def count_tokens(self, prompt: str) -> int:
         """현재 모델의 입력 토큰 수를 계산한다."""
         ...
-
-
-class _ConfiguredTransport(Protocol):
-    async def generate(
-        self,
-        prompt: str,
-        schema: JSONObject,
-        image: Image | None,
-        *,
-        seed: int | None,
-        temperature: float | None,
-    ) -> GeminiResponse | str: ...
-
-
-async def _generate_configured(
-    transport: GeminiTransport,
-    prompt: str,
-    schema: JSONObject,
-    image: Image | None,
-    *,
-    seed: int | None,
-    temperature: float | None,
-) -> GeminiResponse | str:
-    if seed is None and temperature is None:
-        return await transport.generate(prompt, schema, image)
-    return await cast(_ConfiguredTransport, transport).generate(
-        prompt, schema, image, seed=seed, temperature=temperature
-    )
 
 
 def _http_options(settings: Settings) -> types.HttpOptions:
@@ -463,14 +440,14 @@ class GeminiClient:
         try:
             _check_input(prompt, image)
             validator = _validator(schema)
-            operation = partial(
-                _generate_configured,
-                prompt=prompt,
-                schema=schema,
-                image=image,
-                seed=seed,
-                temperature=temperature,
-            )
+
+            async def operation(transport: GeminiTransport) -> GeminiResponse | str:
+                if seed is None and temperature is None:
+                    return await transport.generate(prompt, schema, image)
+                return await transport.generate(
+                    prompt, schema, image, seed=seed, temperature=temperature
+                )
+
             return await self._request(operation, validator, on_attempt)
         except (LLMInvalidResponse, LLMTransientError, LLMPermanentError) as error:
             failure = error
