@@ -104,6 +104,22 @@ def test_uniform_multiline_page_has_no_distinct_heading() -> None:
     assert extract_heading_lines(tokens) == []
 
 
+def test_prompt_keeps_large_cover_and_ignores_uniform_body_with_missing_size() -> None:
+    pages = [
+        [_TokenStub("2장", 1, 32), _TokenStub("조건부 확률", 2, 32)],
+        [_TokenStub("본문 첫 줄", 1, 12), _TokenStub("본문 둘째 줄", 2, 12)],
+        [
+            _TokenStub("일반 본문 첫 줄", 1, 12),
+            _TokenStub("일반 본문 둘째 줄", 2, 12),
+            _TokenStub("크기 없는 줄", 3, None),
+        ],
+    ]
+    prompt = build_analysis_prompt(pages)
+    assert r'제목 페이지 1: "2장\n조건부 확률"' in prompt
+    assert "제목 페이지 2:" not in prompt
+    assert "제목 페이지 3:" not in prompt
+
+
 def test_heading_line_ids_are_scoped_to_each_page() -> None:
     """페이지마다 반복되는 줄 번호가 다른 페이지와 섞이지 않는지 검증한다."""
     pages = [[_TokenStub("표지", 1, 30)], [_TokenStub("절 제목", 1, 20)]]

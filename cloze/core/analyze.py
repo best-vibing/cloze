@@ -7,6 +7,7 @@ PR #15의 모델은 수정하지 않고 읽기 전용 Protocol로 토큰 필드�
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from math import isfinite
+from statistics import median
 from typing import Any, Protocol
 
 from jsonschema import Draft202012Validator, ValidationError
@@ -104,16 +105,19 @@ def _usable_font_size(token: AnalysisToken) -> float:
     return size if isfinite(size) and size > 0 else 0.0
 
 
-def extract_heading_lines(tokens: Sequence[AnalysisToken]) -> list[str]:
+def extract_heading_lines(
+    tokens: Sequence[AnalysisToken], body_size: float | None = None
+) -> list[str]:
     """한 페이지에서 최대 글자 크기를 포함하는 줄 전체를 추출한다.
 
     Args:
         tokens: 한 페이지의 원문 읽기 순서 토큰. line_id는 페이지 내부 식별자다.
+        body_size: 문서 전체에서 크기가 확인된 줄의 중앙 글자 크기.
 
     Returns:
         최대 유효 크기와 동률인 모든 줄을 첫 등장 순서로 반환한다. 같은 줄의
         작은 글씨와 크기가 누락된 토큰도 포함하며 토큰 순서는 바꾸지 않는다.
-        유효한 크기가 없거나 여러 줄이 모두 최대 크기면 빈 목록이다.
+        글자 크기로 제목과 본문을 구분할 수 없으면 빈 목록이다.
         제목 여부는 글자 크기 휴리스틱이다.
     """
     sizes = [_usable_font_size(token) for token in tokens]
@@ -123,10 +127,10 @@ def extract_heading_lines(tokens: Sequence[AnalysisToken]) -> list[str]:
     heading_ids = {
         token.line_id for token, size in zip(tokens, sizes, strict=True) if size == largest
     }
-    if len(heading_ids) > 1 and heading_ids == {
-        token.line_id for token in tokens if token.text.strip()
-    }:
-        return []
+    sized_lines = {token.line_id for token, size in zip(tokens, sizes, strict=True) if size}
+    if len(heading_ids) > 1 and heading_ids == sized_lines:
+        if body_size is None or largest <= body_size:
+            return []
     return _join_heading_lines(tokens, heading_ids)
 
 
@@ -192,9 +196,21 @@ def _page_text(tokens: Sequence[AnalysisToken]) -> str:
     return "\n".join(_join_heading_lines(tokens, {token.line_id for token in tokens}))
 
 
-def _heading_fragment(number: int, tokens: Sequence[AnalysisToken]) -> str:
+def _document_body_size(pages: Sequence[Sequence[AnalysisToken]]) -> float | None:
+    sizes = []
+    for page in pages:
+        line_sizes: dict[int, float] = {}
+        for token in page:
+            size = _usable_font_size(token)
+            if size:
+                line_sizes[token.line_id] = max(size, line_sizes.get(token.line_id, 0.0))
+        sizes.extend(line_sizes.values())
+    return median(sizes) if sizes else None
+
+
+def _heading_fragment(number: int, tokens: Sequence[AnalysisToken], body_size: float | None) -> str:
     """실제 제목이 있는 페이지에만 제목 조각을 만든다."""
-    lines = extract_heading_lines(tokens)
+    lines = extract_heading_lines(tokens, body_size)
     return _analysis_fragment(f"제목 페이지 {number}", "\n".join(lines)) if lines else ""
 
 
@@ -235,7 +251,12 @@ def build_analysis_prompt(pages: Sequence[Sequence[AnalysisToken]]) -> str:
     """
     indexed = list(enumerate(pages, start=1))
     selected = select_representative_pages(indexed, lambda page: _page_text(page[1]))
-    headings = list(filter(None, map(lambda page: _heading_fragment(*page), indexed)))
+    body_size = _document_body_size(pages)
+    headings = [
+        fragment
+        for number, tokens in indexed
+        if (fragment := _heading_fragment(number, tokens, body_size))
+    ]
     bodies = [
         _analysis_fragment(f"본문 페이지 {number}", _page_text(ts)) for number, ts in selected
     ]
