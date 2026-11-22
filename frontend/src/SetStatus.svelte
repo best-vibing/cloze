@@ -1,8 +1,10 @@
 <script>
-  // 세트 하나를 2초마다 조회해 상태와 진행률을 보여 준다. 입력칸 겹치기는 풀이 화면 PR(#58)에서 붙인다.
-  // 서버와는 api.js로만 주고받는다. fetch를 여기서 부르지 않는다.
+  // 세트 하나를 2초마다 조회해 상태와 진행률을 보여 주고, 끝나면(done·partial) 쪽마다 입력칸을 겹쳐 그린다(#58).
+  // 서버와는 api.js로만 주고받는다. fetch를 여기서 부르지 않는다. 제출·정답 공개는 #36에서 붙인다.
   import { onMount } from "svelte";
   import { ApiError, getBlankSet } from "./api.js";
+  import BlankPage from "./BlankPage.svelte";
+  import { blockedByIme, trackComposition } from "./ime.js";
 
   let { setId } = $props();
 
@@ -17,11 +19,22 @@
 
   let blankSet = $state(null);
   let problem = $state("");
+  let values = $state({}); // blank_id → 입력. 제출(#36)할 때 이 값을 보낸다.
+  let hint = $state("");
 
-  const finished = $derived(blankSet && !["queued", "running"].includes(blankSet.status));
-  const blankCount = $derived(blankSet?.pages.reduce((n, p) => n + p.blanks.length, 0) ?? 0);
+  const isRunning = (set) => ["queued", "running"].includes(set.status);
+  const finished = $derived(blankSet && !isRunning(blankSet));
+  const pages = $derived(
+    finished && !blankSet.error ? [...blankSet.pages].sort((a, b) => a.page_no - b.page_no) : [],
+  );
+  const blankCount = $derived(pages.reduce((n, p) => n + p.blanks.length, 0));
+  // Enter 이동 순서: 쪽 순서 → 쪽 안에서 order.
+  const order = $derived(
+    pages.flatMap((p) => [...p.blanks].sort((a, b) => a.order - b.order).map((b) => b.blank_id)),
+  );
 
   onMount(() => {
+    trackComposition();
     let timer;
     // 요청을 기다리는 동안 화면이 사라지면, 응답이 온 뒤 타이머를 다시 걸지 않는다.
     let stopped = false;
@@ -29,7 +42,7 @@
       try {
         blankSet = await getBlankSet(setId);
         problem = "";
-        if (!["queued", "running"].includes(blankSet.status)) return;
+        if (!isRunning(blankSet)) return;
       } catch (e) {
         // 서버 문장(message)은 텍스트로만 넣는다. Svelte {…}는 HTML로 해석하지 않는다.
         problem = e instanceof ApiError ? e.message : "연결에 문제가 있어요. 잠시 후 다시 시도해 주세요.";
@@ -43,6 +56,20 @@
       clearTimeout(timer);
     };
   });
+
+  /** Enter는 다음 칸, Shift+Enter는 이전 칸. Tab은 브라우저가 DOM 순서(= order)로 옮긴다. 조합 중 Enter·Tab은 막는다. */
+  function onkeydown(event, blankId) {
+    if (event.key !== "Enter" && event.key !== "Tab") return;
+    const ime = blockedByIme(event);
+    if (ime || event.key === "Enter") event.preventDefault();
+    if (ime || event.key !== "Enter") return;
+    const next = order[order.indexOf(blankId) + (event.shiftKey ? -1 : 1)];
+    if (next) document.getElementById(`blank-${next}`)?.focus();
+  }
+
+  function onfocus(blank) {
+    hint = blank.hint ? `힌트: ${blank.hint}` : "";
+  }
 </script>
 
 <main>
@@ -52,18 +79,22 @@
   {#if blankSet}
     <section aria-live="polite">
       <p><strong>{LABEL[blankSet.status] ?? blankSet.status}</strong></p>
-      <progress max={blankSet.progress.total} value={blankSet.progress.done}></progress>
-      <span>처리 {blankSet.progress.done} / {blankSet.progress.total}쪽</span>
+      {#if !finished}
+        <progress max={blankSet.progress.total} value={blankSet.progress.done}></progress>
+        <span>처리 {blankSet.progress.done} / {blankSet.progress.total}쪽</span>
+      {/if}
       {#if blankSet.preset_reason}<p>{blankSet.preset_reason}</p>{/if}
       {#if blankSet.error}<p class="problem">{blankSet.error.message}</p>{/if}
       {#if finished && !blankSet.error}
         <!-- progress는 처리를 시도한 쪽, pages는 풀 수 있는 쪽이라 partial이면 둘이 다르다(계약 2절). -->
-        {#if blankSet.status === "partial"}
+        {#if pages.length === 0}
+          <p>풀 수 있는 쪽이 없어요. 다른 PDF로 다시 올려 주세요.</p>
+        {:else if blankSet.status === "partial"}
           <p>
-            {blankSet.progress.total}쪽 중 {blankSet.pages.length}쪽만 만들었어요. 빈칸 {blankCount}개를 받았어요.
+            {blankSet.progress.total}쪽 중 {pages.length}쪽만 만들었어요. 빈칸 {blankCount}개를 받았어요.
           </p>
         {:else}
-          <p>{blankSet.pages.length}쪽, 빈칸 {blankCount}개를 받았어요.</p>
+          <p>{pages.length}쪽, 빈칸 {blankCount}개를 받았어요.</p>
         {/if}
       {/if}
     </section>
@@ -72,21 +103,52 @@
   {/if}
 </main>
 
+{#if pages.length}
+  <div class="pages">
+    {#each pages as page (page.page_no)}
+      <BlankPage {page} bind:values {onkeydown} {onfocus} />
+    {/each}
+  </div>
+  <footer class="hint">
+    <p role="status">{hint}</p>
+  </footer>
+{/if}
+
 <style>
   main {
     max-width: 720px;
     margin: 0 auto;
     padding: 16px;
-    font-family: system-ui, "Malgun Gothic", sans-serif;
   }
   progress {
     width: 240px;
     vertical-align: middle;
   }
   .problem {
-    color: #b91c1c;
+    color: var(--danger);
   }
   .problem:empty {
+    display: none;
+  }
+  .pages {
+    display: grid;
+    gap: 16px;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 16px 16px;
+  }
+  .hint {
+    position: sticky;
+    bottom: 0;
+    padding: 6px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    font-size: 0.9rem;
+  }
+  .hint p {
+    margin: 0;
+  }
+  .hint:has(p:empty) {
     display: none;
   }
 </style>

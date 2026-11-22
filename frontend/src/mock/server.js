@@ -13,6 +13,8 @@
 // 처리 중(queued·running)인 세트에 답안을 내면 어느 시나리오든 409 not_ready다.
 // 확장자가 .pdf가 아니면 415 not_pdf, 20MB를 넘으면 413 file_too_large는 시나리오와 상관없이 낸다.
 // 같은 PDF를 다시 올렸을 때 기존 document_id를 돌려주는 것(계약 2절 POST /documents)은 흉내 내지 않는다.
+//
+// 데모 세트(업로드 없이 풀이 화면 보기): #/sets/6f1c2a4e-0000-4000-8000-000000000001
 
 const DEMO_SET_ID = "6f1c2a4e-0000-4000-8000-000000000001";
 const DEMO_DOCUMENT_ID = "0d0c0000-0000-4000-8000-000000000001";
