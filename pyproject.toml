@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "alembic>=1.20.1",
+    "fastapi>=0.162.7",
     "google-genai>=2.33",
     "httpx>=0.28.1,<1",
     "jsonschema>=4.26,<5",
@@ -17,11 +18,15 @@ dependencies = [
     "pypdfium2>=5.14",
     "referencing>=0.37,<1",
     "sqlalchemy[asyncio]>=2.1.8",
+    "taskiq>=0.13.0",
+    "taskiq-redis>=1.2.4",
+    "uvicorn>=0.54.0",
 ]
 
 [dependency-groups]
 dev = [
     "bandit>=1.8",
+    "httpx2>=2.16.0",
     "mypy>=1.18",
     "pytest>=9.1",
     "ruff>=0.17",
