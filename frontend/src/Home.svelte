@@ -1,7 +1,7 @@
 <script>
   // 처음 화면: PDF 하나와 빈칸 방식을 받아 업로드하고, 받은 세트 화면으로 넘어간다(#35).
-  import { ApiError, uploadDocument } from "./api.js";
-  import { LIMITS, uploadErrorMessage, uploadMessage } from "./messages.js";
+  import { uploadDocument } from "./api.js";
+  import { LIMITS, beforeSendMessage, canResend, uploadErrorMessage } from "./messages.js";
 
   // 값과 이름은 데이터 계약 1절 preset.
   const PRESETS = [
@@ -16,18 +16,19 @@
   let dragging = $state(false);
   let busy = $state(false);
   let problem = $state("");
-  // 응답을 받지 못한 업로드. 서버는 받았을 수도 있으니, 다시 보낼 때 같은 Idempotency-Key를 써야 세트가 두 개 생기지 않는다.
+  // 결과를 받지 못한 업로드(응답 끊김·5xx). 서버는 받았을 수도 있으니, 다시 보낼 때 같은 Idempotency-Key를 써야 세트가 두 개 생기지 않는다.
   let retry = $state(null);
   let picker;
 
   function pick(files) {
-    if (busy) return;
+    // 링크 글자처럼 파일이 없는 것을 놓았으면 아무것도 하지 않는다.
+    if (busy || files.length === 0) return;
     retry = null;
-    if (files.length !== 1) return (problem = uploadMessage("multiple_files"));
+    if (files.length > 1) return (problem = beforeSendMessage("multiple_files"));
     const [file] = files;
     // 서버도 같은 검사를 한다. 여기서 먼저 거르는 것은 보내기 전에 바로 알려 주기 위해서다.
-    if (!file.name.toLowerCase().endsWith(".pdf")) return (problem = uploadMessage("not_pdf"));
-    if (file.size > LIMITS.maxMb * 1024 * 1024) return (problem = uploadMessage("file_too_large"));
+    if (!file.name.toLowerCase().endsWith(".pdf")) return (problem = beforeSendMessage("not_pdf"));
+    if (file.size > LIMITS.maxMb * 1024 * 1024) return (problem = beforeSendMessage("file_too_large"));
     // 사용자 동작 한 번 = 키 하나(계약 2절 "중복 요청 방지").
     send({ file, preset, key: crypto.randomUUID() });
   }
@@ -41,7 +42,7 @@
       location.hash = `#/sets/${blank_set_id}`;
     } catch (e) {
       problem = uploadErrorMessage(e);
-      if (!(e instanceof ApiError)) retry = request;
+      if (canResend(e)) retry = request;
     } finally {
       busy = false;
       picker.value = ""; // 같은 파일을 다시 골라도 change가 오게 한다
@@ -76,7 +77,10 @@
         e.preventDefault();
         dragging = true;
       }}
-      ondragleave={() => (dragging = false)}
+      ondragleave={(e) => {
+        // 상자 안의 버튼·라디오로 옮겨 갈 때도 dragleave가 온다. 상자 밖으로 나갈 때만 강조를 끈다.
+        if (!e.currentTarget.contains(e.relatedTarget)) dragging = false;
+      }}
       ondrop={drop}
     >
       <svg class="icon" viewBox="0 0 48 48" aria-hidden="true">

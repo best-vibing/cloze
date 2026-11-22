@@ -9,6 +9,7 @@
 //   encrypted_pdf · too_many_pages · daily_limit_exceeded · too_many_running · service_limit_exceeded
 //                 업로드가 그 코드로 거절된다(계약 3절)
 //   lost_response 업로드를 서버는 받았는데 응답이 끊긴다(키마다 처음 한 번). 같은 키로 다시 보내면 같은 세트가 온다
+//   gateway_timeout 업로드를 서버는 받았는데 프록시가 본문 없는 504를 준다(키마다 처음 한 번). 다시 보내면 같은 세트
 // 처리 중(queued·running)인 세트에 답안을 내면 어느 시나리오든 409 not_ready다.
 // 확장자가 .pdf가 아니면 415 not_pdf, 20MB를 넘으면 413 file_too_large는 시나리오와 상관없이 낸다.
 // 같은 PDF를 다시 올렸을 때 기존 document_id를 돌려주는 것(계약 2절 POST /documents)은 흉내 내지 않는다.
@@ -20,8 +21,10 @@ const POLLS_UNTIL_FINISHED = 2; // 조회 1번째 queued, 2번째 running, 3번�
 
 const scenario = new URLSearchParams(globalThis.location?.search ?? "").get("scenario") ?? "done";
 
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 서버 설정 기본값(신뢰성 설계 5절)과 같게
-// 시나리오 이름 → 업로드 거절. 문장은 서버가 줄 법한 예시다(화면은 코드로 자기 문장을 고른다).
+// 서버 설정 Settings.upload_max_bytes 기본값(#101)과 같게. 화면 쪽 값은 messages.js의 LIMITS.
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+// 시나리오 이름 → 업로드 거절. 문장은 서버가 줄 법한 예시이고, 화면은 이 문장을 그대로 보여 준다.
+// "30쪽"은 서버 설정 upload_max_pages 기본값(#101)이다.
 const UPLOAD_REJECTIONS = {
   encrypted_pdf: [422, "암호가 걸렸거나 스크립트가 든 PDF는 올릴 수 없어요."],
   too_many_pages: [422, "30쪽까지 올릴 수 있어요."],
@@ -52,7 +55,7 @@ const state = {
   documents: new Map([[DEMO_DOCUMENT_ID, { filename: "세포생물학-3주차.pdf", sets: [DEMO_SET_ID] }]]),
   attempts: new Map(), // attempt_id → {set_id, submitted_at, score, after_reveal, revealed_at}
   idempotency: new Map(), // "경로 키" → {fingerprint: 요청 내용, response: 처음 돌려준 응답}
-  lostKeys: new Set(), // lost_response 시나리오에서 응답을 한 번 끊은 키
+  lostKeys: new Set(), // lost_response·gateway_timeout 시나리오에서 응답을 한 번 끊은 키
 };
 
 const ROUTES = [
@@ -123,9 +126,12 @@ function uploadDocument(init) {
     return reply(202, { document_id: documentId, blank_set_id: setId });
   });
   const key = init.headers["Idempotency-Key"];
-  if (scenario === "lost_response" && response.ok && !state.lostKeys.has(key)) {
+  const cutOnce = ["lost_response", "gateway_timeout"].includes(scenario);
+  if (cutOnce && response.ok && !state.lostKeys.has(key)) {
     state.lostKeys.add(key);
-    throw new TypeError("Failed to fetch"); // fetch가 응답을 못 받았을 때와 같은 오류
+    if (scenario === "lost_response") throw new TypeError("Failed to fetch"); // fetch가 응답을 못 받았을 때와 같은 오류
+    // 프록시(Tailscale 등)의 시간 초과는 계약 3절 모양이 아닌 HTML 본문으로 온다.
+    return new Response("<html><body>504 Gateway Timeout</body></html>", { status: 504 });
   }
   return response;
 }
