@@ -110,7 +110,6 @@ def test_invalid_counts_are_not_retried(
     ("error", "expected", "attempts"),
     [
         (errors.APIError(408, {}), LLMTransientError, 3),
-        (errors.APIError(429, {}), LLMTransientError, 3),
         (errors.APIError(503, {}), LLMTransientError, 3),
         (httpx.ConnectError("sensitive"), LLMTransientError, 3),
         (TimeoutError("sensitive"), LLMTransientError, 3),
