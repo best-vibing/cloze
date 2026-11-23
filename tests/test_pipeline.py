@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -9,13 +10,13 @@ from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransien
 from cloze.core.models import PageInfo, PageTokens, Policy, Token
 
 
-def page_with_text(number: int, length: int) -> PageTokens:
+def page_with_text(number: int, text: str) -> PageTokens:
     return PageTokens(
         page=PageInfo(page_no=number, width_pt=100, height_pt=100),
         tokens=[
             Token(
                 id=0,
-                text="x" * length,
+                text=text,
                 bbox=(0.1, 0.1, 0.2, 0.2),
                 line_id=0,
                 font_size=12,
@@ -26,7 +27,7 @@ def page_with_text(number: int, length: int) -> PageTokens:
 
 
 def test_prepare_preserves_low_text_pages_and_images(monkeypatch: pytest.MonkeyPatch) -> None:
-    pages = [page_with_text(1, 20), page_with_text(2, 19)]
+    pages = [page_with_text(1, "인공지능은 데이터를 학습한다"), page_with_text(2, "2")]
     monkeypatch.setattr(pipeline, "extract_tokens", Mock(return_value=pages))
     images = [Image.new("RGB", (2, 2)), Image.new("RGB", (3, 3))]
     render = Mock(side_effect=images)
@@ -41,7 +42,7 @@ def test_prepare_preserves_low_text_pages_and_images(monkeypatch: pytest.MonkeyP
 
 
 def test_prepare_rejects_exactly_eighty_percent_low_text(monkeypatch: pytest.MonkeyPatch) -> None:
-    pages = [page_with_text(1, 20)] + [page_with_text(i, 19) for i in range(2, 6)]
+    pages = [page_with_text(1, "Readable body")] + [page_with_text(i, str(i)) for i in range(2, 6)]
     monkeypatch.setattr(pipeline, "extract_tokens", Mock(return_value=pages))
     render = Mock()
     monkeypatch.setattr(pipeline, "render_page", render)
@@ -52,6 +53,25 @@ def test_prepare_rejects_exactly_eighty_percent_low_text(monkeypatch: pytest.Mon
     render.assert_not_called()
 
 
+def test_prepare_reads_short_korean_fixture() -> None:
+    pdf = (Path(__file__).parent / "fixtures" / "korean.pdf").read_bytes()
+    assert sum(page.has_text for page in pipeline.prepare(pdf)) >= 4
+
+
+def test_prepare_rejects_document_with_only_repeated_footer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pages = [page_with_text(i, f"Lecture notes {i}") for i in range(1, 6)]
+    for page in pages:
+        page.tokens[0].bbox = (0.1, 0.94, 0.3, 0.97)
+    monkeypatch.setattr(pipeline, "extract_tokens", Mock(return_value=pages))
+    render = Mock()
+    monkeypatch.setattr(pipeline, "render_page", render)
+    with pytest.raises(pipeline.UnreadablePDFError):
+        pipeline.prepare(b"test pdf")
+    render.assert_not_called()
+
+
 def prepared_page(
     number: int, words: tuple[str, ...] = ("physics", "energy"), *, has_text: bool = True
 ) -> pipeline.PreparedPage:
@@ -59,7 +79,7 @@ def prepared_page(
         Token(
             id=i,
             text=word,
-            bbox=(0.1, 0.1 + 0.2 * i, 0.3, 0.18 + 0.2 * i),
+            bbox=(0.1, 0.1 + 0.15 * i, 0.3, 0.18 + 0.15 * i),
             line_id=i,
             font_size=12,
             fontname="Arial",
@@ -122,7 +142,7 @@ def test_build_after_permanent_error_skips_completed_and_keeps_low_text_pages() 
                     prepared_page(2),
                     prepared_page(3, ("short", "line"), has_text=False),
                     prepared_page(4, ("velocity", "momentum")),
-                    prepared_page(5, ("acceleration", "acceleration")),
+                    prepared_page(5, ("acceleration",) * 4),
                 ],
                 Policy(seed=2, density=50),
                 factory,
@@ -165,7 +185,7 @@ def test_build_retries_a_selection_with_an_exposed_answer() -> None:
     ask = AsyncMock(
         side_effect=[
             {"blanks": [{"token_ids": [0], "type": "term"}]},
-            {"blanks": [{"token_ids": [2], "type": "term"}]},
+            {"blanks": [{"token_ids": [4], "type": "term"}]},
         ]
     )
 
@@ -173,8 +193,8 @@ def test_build_retries_a_selection_with_an_exposed_answer() -> None:
         return [
             result
             async for result in pipeline.build(
-                [prepared_page(1, ("physics", "physics", "energy"))],
-                Policy(seed=1, density=30),
+                [prepared_page(1, ("physics", "physics", "physics", "physics", "energy"))],
+                Policy(seed=1, density=20),
                 Mock(return_value=ask),
                 skip_pages=set(),
                 analysis=None,

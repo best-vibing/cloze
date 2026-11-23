@@ -18,8 +18,6 @@ from cloze.core.redact import encode_webp, redact
 from cloze.core.select.gemini import AskSelectorLLM, RetryFeedback, select_gemini
 from cloze.core.select.rule import build_doc_stats, select_rule
 
-MIN_PAGE_TEXT_CHARS = 20
-
 
 class UnreadablePDFError(ValueError):
     """Too little text was extracted to generate a blank set."""
@@ -35,9 +33,9 @@ class PreparedPage:
 def prepare(pdf: bytes) -> list[PreparedPage]:
     """Extract text and images, leaving low-text pages available for rendering."""
     pages = extract_tokens(pdf)
+    candidates = filter_candidates(pages, Policy(seed=0))
     readable = [
-        sum(len(token.text.strip()) for token in page.tokens) >= MIN_PAGE_TEXT_CHARS
-        for page in pages
+        _has_readable_text(page, options) for page, options in zip(pages, candidates, strict=True)
     ]
     # Compare as integers to include the exact 80% boundary.
     if 5 * readable.count(False) >= 4 * len(pages):
@@ -46,6 +44,19 @@ def prepare(pdf: bytes) -> list[PreparedPage]:
         PreparedPage(page, render_page(pdf, page.page.page_no), has_text)
         for page, has_text in zip(pages, readable, strict=True)
     ]
+
+
+def _has_readable_text(page: PageTokens, candidates: PageCandidates) -> bool:
+    margins = {item.id for item in candidates.excluded if item.reason == "header_footer"}
+    letters = (
+        char
+        for token in page.tokens
+        if token.id not in margins
+        for char in token.text
+        if char.isalpha()
+    )
+    # Two letters also cover short Korean labels and one-letter mathematical variables.
+    return next(letters, None) is not None and next(letters, None) is not None
 
 
 type SelectionSource = Literal["gemini", "rule", "none"]
