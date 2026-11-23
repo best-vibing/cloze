@@ -2,7 +2,7 @@
 
 import math
 import unicodedata
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from itertools import zip_longest
 from typing import Literal, TypedDict
@@ -27,6 +27,7 @@ from cloze.core.select.rule import target_count
 # [가설] 글자 크기에 곱해 사방에 더할 여백을 구한다.
 PAD_RATIO = 0.15
 MIN_SURVIVAL = 0.6
+MAX_ANSWER_LOCATIONS = 3
 type RejectionReason = (
     ExcludeReason
     | Literal[
@@ -80,9 +81,12 @@ def apply_gate(
     if page.page.page_no != candidates.page_no or not math.isfinite(policy.density):
         raise ValueError("Expected matching pages and finite density")
     accepted, rejected = _validate_spans(page, candidates, selection, policy)
-    blanks = _build_blanks(page, accepted, rejected)
+    original_ids = {token.id for token, _ in accepted}
+    expanded = _complete_answer_groups(page, candidates, policy, accepted)
+    blanks = _build_blanks(page, expanded, rejected)
     target = target_count(page, candidates, policy)
-    ratio = len(blanks) / target if target > 0 else 1.0
+    survivors = sum(blank.token_ids[0] in original_ids for blank in blanks)
+    ratio = survivors / target if target > 0 else 1.0
     return GateResult(blanks, rejected, {"survival_ratio": ratio}, ratio >= MIN_SURVIVAL)
 
 
@@ -164,6 +168,39 @@ def _answer_key(text: str) -> str:
     return normalize_ko(normalize(text))
 
 
+def _complete_answer_groups(
+    page: PageTokens,
+    candidates: PageCandidates,
+    policy: Policy,
+    accepted: list[tuple[Token, Slot]],
+) -> list[tuple[Token, Slot]]:
+    occurrences: dict[str, list[Token]] = defaultdict(list)
+    for token in page.tokens:
+        occurrences[_answer_key(token.text)].append(token)
+    allowed = set(candidates.candidate_ids)
+    seen = {token.id: token.word_bbox or token.bbox for token, _ in accepted}
+    expanded = accepted.copy()
+    for token, slot in accepted:
+        group = occurrences[_answer_key(token.text)]
+        if not 1 < len(group) <= MAX_ANSWER_LOCATIONS:
+            continue
+        missing = [item for item in group if item.id not in seen]
+        positions = seen.copy()
+        for item in missing:
+            if (
+                item.id not in allowed
+                or token_reason(item.text, policy.include_numbers) is not None
+                or _geometry_reason(page.page, item, positions) is not None
+            ):
+                break
+            positions[item.id] = item.word_bbox or item.bbox
+        else:
+            # Additional positions use the same type, with hints and variants validated per token.
+            expanded.extend((item, slot) for item in missing)
+            seen = positions
+    return expanded
+
+
 def _build_blanks(
     page: PageTokens,
     accepted: list[tuple[Token, Slot]],
@@ -176,7 +213,7 @@ def _build_blanks(
     groups: dict[str, int] = {}
     for token, slot in ordered:
         key = _answer_key(token.text)
-        if covered[key] != occurrences[key]:
+        if covered[key] != occurrences[key] or covered[key] > MAX_ANSWER_LOCATIONS:
             rejected.append(RejectedBlank([token.id], "answer_exposed"))
             continue
         order = len(blanks)

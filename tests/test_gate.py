@@ -105,11 +105,35 @@ def test_format_geometry_and_candidates() -> None:
     assert [blank.token_ids for blank in result.blanks] == [[20]]
 
 
-def test_exposed_answer_in_unselected_token() -> None:
+def test_exposed_answer_in_ineligible_token() -> None:
     page = page_with("세포는", "세포가", "원리")
-    result = apply_gate(page, candidates(page), selection(20, 18), Policy(seed=1, density=100))
+    options = candidates(page).model_copy(update={"candidate_ids": [18, 20]})
+    result = apply_gate(page, options, selection(20, 18), Policy(seed=1, density=100))
     assert [item.reason for item in result.rejected] == ["answer_exposed"]
     assert [blank.answer for blank in result.blanks] == ["원리"]
+
+
+def test_completes_answer_group_without_inflating_survival() -> None:
+    page = page_with("세포는", "세포가", "세포를")
+    result = apply_gate(page, candidates(page), selection(20), Policy(seed=1, density=100))
+    assert len(result.blanks) == 3
+    assert {blank.answer_group for blank in result.blanks} == {0}
+    assert result.quality["survival_ratio"] == pytest.approx(1 / 3)
+
+
+def test_rejects_group_larger_than_three() -> None:
+    page = page_with("세포는", "세포가", "세포를", "세포에")
+    result = apply_gate(page, candidates(page), selection(20), Policy(seed=1, density=100))
+    assert not result.blanks
+    assert [item.reason for item in result.rejected] == ["answer_exposed"]
+
+
+def test_does_not_partially_expand_group_with_overlapping_location() -> None:
+    page = page_with("세포는", "세포가", "세포를", "원리")
+    page.tokens[2].bbox = page.tokens[3].bbox
+    result = apply_gate(page, candidates(page), selection(20, 17), Policy(seed=1, density=100))
+    assert [blank.answer for blank in result.blanks] == ["원리"]
+    assert [item.reason for item in result.rejected] == ["answer_exposed"]
 
 
 @pytest.mark.parametrize(
