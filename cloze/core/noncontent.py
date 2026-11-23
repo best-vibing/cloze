@@ -12,7 +12,7 @@ type Line = list[Token]
 COVER = {"cover", "title slide", "표지"}
 CLOSING = {"end", "the end", "thank you", "thanks", "감사합니다", "수고하셨습니다"}
 _PROSE_OR_CODE = re.compile(r"[;=:{}/!?]|[.!?]$")
-_PRESENTER = re.compile(r"(?:professor|prof\.?|instructor|by)[ :]+.+|.+\s+교수(?:님)?")
+_PRESENTER = re.compile(r"(?:professor|prof\.?|instructor)[ :]+.+|.+\s+교수(?:님)?")
 
 
 def noncontent_ids(

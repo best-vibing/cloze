@@ -93,6 +93,35 @@ def test_first_concept_slide_with_two_short_lines_is_preserved() -> None:
     assert 200 in candidates.candidate_ids
 
 
+def test_confirmed_cover_excludes_subtitle() -> None:
+    page = _page(
+        (0.22, 40, "Probability and Statistics"),
+        (0.32, 20, "Estimation Methods"),
+        (0.42, 18, "Instructor: Example Lecturer"),
+    )
+    result = filter_candidates([page], POLICY)[0]
+    assert not result.candidate_ids
+    assert {item.id for item in result.excluded if item.reason == "noncontent"} == {
+        token.id for token in page.tokens
+    }
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [(0.30, 40, "Optimization"), (0.40, 20, "by gradient descent")],
+        [(0.30, 40, "Backpropagation"), (0.40, 20, "by chain rule"), (0.46, 20, "local gradients")],
+    ],
+)
+def test_first_concept_slide_preserves_lines_starting_with_by(
+    lines: list[tuple[float, float, str]],
+) -> None:
+    next_page = _page((0.10, 30, "Next slide"), page_no=2)
+    result = filter_candidates([_page(*lines), next_page], POLICY)[0]
+    assert result.candidate_ids
+    assert all(item.reason != "noncontent" for item in result.excluded)
+
+
 def test_cover_without_middle_footer_preserves_lower_learning_slide() -> None:
     page = _page(
         (0.20, 27, "Probability and Statistics"),
