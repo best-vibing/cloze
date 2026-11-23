@@ -147,6 +147,19 @@ def test_regeneration_reuses_candidates_when_fresh_ones_run_out(
     assert result.spans == [[1], [2]]
     assert "[1]ATP" in ask.call_args.args[0]
     assert "[2]energy" in ask.call_args.args[0]
+    assert "새 후보" not in ask.call_args.args[0]
+
+
+def test_regeneration_states_minimum_when_fresh_count_is_insufficient(
+    page: PageTokens, candidates: PageCandidates
+) -> None:
+    ask = AsyncMock(return_value={"blanks": [blank(1), blank(2)]})
+    policy = Policy(seed=1, density=50)
+    asyncio.run(select_gemini(page, candidates, policy, ask, avoid={1}))
+    prompt = ask.call_args.args[0]
+    assert "새 후보 [2]" in prompt
+    assert "이전 후보 [1]" in prompt
+    assert "반드시 2~2개" in prompt
 
 
 def test_sdk_selection_options(

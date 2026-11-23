@@ -92,6 +92,7 @@ def _prompt(
     minimum: int,
     maximum: int,
     retry: RetryFeedback | None,
+    fresh_ids: list[int],
     reused_ids: list[int],
 ) -> str:
     lines: dict[int, list[str]] = defaultdict(list)
@@ -113,7 +114,10 @@ def _prompt(
         '"variants":[]}]} (type: text, number, term).\n'
     )
     if reused_ids:
-        instructions += f"이전에 쓴 후보 {reused_ids}는 가능한 한 피하고, 부족할 때만 고른다.\n"
+        instructions += (
+            f"새 후보 {fresh_ids}를 우선 고르고, 부족한 칸은 이전 후보 {reused_ids}에서 채워 "
+            f"반드시 {minimum}~{maximum}개를 고른다.\n"
+        )
     if retry is not None:
         instructions += f"재시도 자료(JSON): {json.dumps(retry, ensure_ascii=False)}\n"
     return f"{instructions}[페이지 {page.page.page_no}]\n{source}"
@@ -201,7 +205,7 @@ async def select_gemini(
     fresh = {token_id: token for token_id, token in allowed.items() if token_id not in avoid}
     if len(fresh) >= maximum:
         allowed = fresh
-    reused_ids = sorted(allowed.keys() & avoid)
-    prompt = _prompt(page, allowed, policy, minimum, maximum, retry, reused_ids)
+    reused_ids = sorted(allowed.keys() & avoid) if fresh else []
+    prompt = _prompt(page, allowed, policy, minimum, maximum, retry, sorted(fresh), reused_ids)
     result = await ask_llm(prompt, _SCHEMA, seed=policy.seed, temperature=0.3)
     return _parse(result, allowed, minimum, maximum)
