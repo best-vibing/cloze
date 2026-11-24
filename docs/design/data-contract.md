@@ -52,6 +52,9 @@
 ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파싱된 dict
 ```
 
+Gemini 선택기는 선택적 키워드 `seed`와 `temperature`를 함께 넘긴다. 기존 분석 호출은
+이 값을 생략하며, 생성 기록·오류 분류·토큰 계산은 같은 클라이언트를 계속 사용한다.
+
 오류 종류는 `cloze/core/errors`에 정의하고, `infra/gemini`가 실제 오류를 이 종류로 바꿔 던진다(infra가 core를 import하는 방향이라 의존 규칙에 맞는다).
 
 | 오류 | 언제 | `pipeline`의 처리 | 작업 결과 |
