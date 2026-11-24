@@ -38,7 +38,11 @@
 
 `Token`에는 `font_color`, `conf`, `block_id`를 두지 않는다([Issue #41 팀 합의](https://github.com/best-vibing/cloze/issues/41#issuecomment-6818882350)). 색은 토큰 필드가 아니라 `blanks[].style`을 채우는 별도 처리 단계에서 다루며, redact가 칠할 때 계산한다. 구체적인 style 조립 방식은 [PR #94](https://github.com/best-vibing/cloze/pull/94)의 후속 합의 사항이다.
 
-[`pipeline`](../../cloze/core/pipeline.py)의 `prepare`는 재사용할 페이지를 반환하고, `analyze_document`는 워커가 페이지 생성 전에 저장할 자동 분석 결과를 반환한다. `build`는 완료된 페이지를 건너뛰고 페이지별 이전 토큰 ID와 호출 기록기가 적용된 `ask_llm_for`를 사용한다. 워커는 결과를 받은 순서대로 저장할 수 있다.
+[게이트](../../cloze/core/gate.py)는 같은 페이지의 후보·제외 사유도 받는다. 게이트가 반환한
+`GateBlank`의 스타일에는 글자 크기 비율만 있다. 최종 `Blank`에는 이미지 처리에서 얻은
+글자색과 redact가 반환한 배경색을 채워야 한다.
+
+[`pipeline`](../../cloze/core/pipeline.py)의 `prepare`는 다시 만들기에 재사용할 페이지를 반환하고(L2), `analyze_document`는 워커가 페이지 생성 전에 저장할 자동 분석 결과를 반환한다. `build`는 완료된 페이지를 건너뛰고(L4), 페이지별 이전 토큰 ID와 호출 기록기가 적용된 `ask_llm_for`를 사용한다. 워커는 결과를 받은 순서대로 저장할 수 있다.
 
 `filter`가 문서 전체를 받는 이유: 머리글·바닥글은 여러 페이지에서 같은 위치에 반복되는 글로 판정하므로 한 페이지만 봐서는 알 수 없다. 기준을 넘는 위치 묶음은 모두 뺀다(두 장 모아찍기 PDF는 바닥글이 한 쪽에 두 번 나온다). 그렇게 확인된 바닥글 문구로 문서의 다른 곳(표지 등)에서 **줄 전체가 바닥글 구절로만 이루어져 있으면** 그 줄의 토큰도 `footer_phrase`로 뺀다. 본문 문장 속에 같은 구절이 나오면("Vibe coding is a way …") 학습 내용이므로 후보로 남긴다. 구절은 바닥글 줄을 구분 기호나 큰 간격으로 나눈 것이고, 토큰 두 개 이상인 구절만 맞춘다. 한 단어로 맞추면 본문의 정상 단어까지 빠지기 때문이다. 비교는 `word_key`(대소문자·앞뒤 부호·조사 무시)로 한다. 값과 규칙은 [`core/filter`](../../cloze/core/filter.py)가 기준이다.
 
@@ -51,6 +55,9 @@
 ```
 ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파싱된 dict
 ```
+
+Gemini 선택기는 선택적 키워드 `seed`와 `temperature`를 함께 넘긴다. 기존 분석 호출은
+이 값을 생략하며, 생성 기록·오류 분류·토큰 계산은 같은 클라이언트를 계속 사용한다.
 
 오류 종류는 `cloze/core/errors`에 정의하고, `infra/gemini`가 실제 오류를 이 종류로 바꿔 던진다(infra가 core를 import하는 방향이라 의존 규칙에 맞는다).
 

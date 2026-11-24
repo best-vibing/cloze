@@ -12,6 +12,7 @@ from pathlib import Path
 from cloze.core.extract import EXTRACT_VERSION, extract_tokens
 from cloze.core.extract.render import draw_boxes, render_page
 from cloze.core.filter import filter_candidates, strip_punctuation
+from cloze.core.gate import blank_bbox
 from cloze.core.models import (
     DEFAULT_DENSITY,
     SCHEMA_VERSION,
@@ -20,7 +21,7 @@ from cloze.core.models import (
     Policy,
     Selection,
 )
-from cloze.core.redact import blank_bbox, encode_webp, redact
+from cloze.core.redact import encode_webp, redact
 from cloze.core.select.rule import build_doc_stats, select_rule
 
 type PageRun = tuple[PageTokens, PageCandidates, Selection]

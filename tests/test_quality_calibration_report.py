@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from cloze.cli.label_sheet import COLUMNS, pdf_rows
+from cloze.cli.label_sheet import main as check_main
 from cloze.cli.quality_calibration_report import METRICS, compare_sheet, main
 from cloze.core.quality_calibration import compare_thresholds, evaluate_removals
 
@@ -72,6 +73,13 @@ def test_bom_quoted_identity_and_no_mutation() -> None:
     assert row == before
 
 
+def test_duplicate_file_with_surrounding_whitespace_rejected() -> None:
+    first = record(file="lecture notes.pdf")
+    second = record(file=" lecture notes.pdf ", label="나쁨")
+    with pytest.raises(ValueError, match="Duplicate"):
+        compare_sheet(sheet(first, second), "score", [0], comparison="<")
+
+
 @pytest.mark.parametrize("page,order", [("1", "1"), ("01", "001")])
 def test_duplicate_identifiers_rejected(page: str, order: str) -> None:
     with pytest.raises(ValueError, match="Duplicate"):
@@ -126,6 +134,61 @@ def test_invalid_structure(text: str) -> None:
 def test_duplicate_header() -> None:
     with pytest.raises(ValueError, match="duplicate"):
         compare_sheet(sheet(header=(*COLUMNS, "score")), "score", [0], comparison="<")
+
+
+def test_mixed_extraction_versions_rejected() -> None:
+    with pytest.raises(ValueError, match="extract_version"):
+        compare_sheet(
+            sheet(record(), record(labeler="bob", extract_version="2")),
+            "score",
+            [0],
+            comparison="<",
+        )
+    assert "alice" in compare_sheet(
+        sheet(record(extract_version="2")), "score", [0], comparison="<"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("", "열"),
+        ("label,labeler,label\n", "열"),
+        ("file,label,labeler\n", "열"),
+        (sheet() + '"unterminated', "CSV"),
+        (sheet(record(), record(page="01")), "Duplicate"),
+        (sheet(record(), record(labeler="bob", extract_version="2")), "extract_version"),
+        (sheet(record(score="NaN")), "score"),
+        (sheet(record(page_survival="Infinity")), "page_survival"),
+        (sheet(record(order="-1")), "order"),
+        (sheet(record(bold_signal="1.1")), "bold_signal"),
+    ],
+)
+def test_check_catches_invalid_sheet_before_reporting(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    text: str,
+    message: str,
+) -> None:
+    path = tmp_path / "check.csv"
+    path.write_text(text, encoding="utf-8-sig")
+    with pytest.raises(SystemExit) as exc:
+        check_main(["check", str(path)])
+    assert exc.value.code == 1
+    assert message in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        sheet(),
+        sheet(record("좋음", "평가자1"), record("나쁨", "평가자2"), record("", "", order="2")),
+    ],
+)
+def test_check_accepts_header_or_independent_ratings(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "check.csv"
+    path.write_text(text, encoding="utf-8-sig")
+    check_main(["check", str(path)])
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), True])
