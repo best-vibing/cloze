@@ -78,25 +78,39 @@ class Selection(BaseModel):
     source: Literal["gemini", "rule"]
 
 
-class BlankStyle(BaseModel):
-    """입력칸 표시 정보. 뜻은 docs/design/grading-and-overlay.md 3.1이다."""
+class GateStyle(BaseModel):
+    """토큰에서 바로 계산할 수 있는 표시 정보."""
 
     font_size_ratio: float
+
+
+class BlankStyle(GateStyle):
+    """입력칸 표시 정보. 뜻은 docs/design/grading-and-overlay.md 3.1이다."""
+
     font_color: str
     bg_color: str
 
 
-class Blank(BaseModel):
-    """페이지 결과의 빈칸 하나(계약 1.4). id·set_id·page_no는 DB 행이 갖는다."""
-
+class _BlankFields(BaseModel):
     token_ids: list[int] = Field(min_length=1)
     bbox: BBox
     type: BlankType
     hint: str | None
-    style: BlankStyle
     answer: str
     variants: list[str]
     # [가설] 계약 1.4 예시에는 null만 있어 묶음 번호를 정수로 두었다. 같은 페이지 안에서만 묶는다.
     answer_group: int | None
     # 페이지 안 읽는 순서(줄 → x좌표). 계약 4절에는 있고 1.4 예시에는 없다.
     order: int
+
+
+class GateBlank(_BlankFields):
+    """게이트가 확정한 빈칸. 색은 후속 이미지 단계에서 채운다."""
+
+    style: GateStyle
+
+
+class Blank(_BlankFields):
+    """페이지 결과의 빈칸 하나(계약 1.4). id·set_id·page_no는 DB 행이 갖는다."""
+
+    style: BlankStyle
