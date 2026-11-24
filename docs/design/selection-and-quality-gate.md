@@ -80,8 +80,8 @@ python -m cloze.cli.quality_calibration_report out/labels/rule.csv --metric scor
 평가자는 `labeler`별로 분리하며 평가자 안에서 `(file, page, order)` 중복을 거절한다.
 `page/order`의 앞자리 0은 같은 숫자로 취급한다. BOM 있는 UTF-8과 BOM 없는 UTF-8을 지원한다.
 기존 19개 열과 숫자 자료형·범위를 검사하고 미라벨 행은 오류로 알린다. 머리글만 있는 시트는
-빈 결과를 출력한다. 서로 다른 추출 버전의 시트는 별도로 비교한다.
-입력 시트와 `make/check`, seed·density 및 기존 계산식은 변경하지 않는다.
+빈 결과를 출력한다. 한 시트에 추출 버전이 섞이면 오류가 나므로 버전별로 비교한다.
+`label_sheet check`는 같은 검증을 사용하며 라벨 작성 중에는 빈 라벨을 허용한다.
 이 표는 후보별 독립 비교이며 평가자 합의, 최적 후보 선정 또는 게이트 기준값 확정이 아니다.
 
 ### 2.6 운영 지표 (게이트가 아니라 경보용)
