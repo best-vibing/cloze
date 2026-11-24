@@ -32,7 +32,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     policy = Policy(preset="concept", density=args.density, seed=args.seed)
     pdf = args.pdf.read_bytes()
     args.out.mkdir(parents=True, exist_ok=True)
-    if args.command == "mask":
+    if args.command == "pipeline":
+        from cloze.cli.pipeline import run_pipeline
+
+        run_pipeline(pdf, policy, args.out, rule_only=args.rule_only, dump_stages=args.dump_stages)
+    elif args.command == "mask":
         _run_mask(pdf, policy, args.out, args.debug_boxes)
     else:
         _run_select(pdf, policy, args.out)
@@ -45,6 +49,10 @@ def _parser() -> argparse.ArgumentParser:
     mask = commands.add_parser("mask", help="빈칸 자리를 칠한 페이지 이미지를 만든다")
     _add_common(mask)
     mask.add_argument("--debug-boxes", action="store_true", help="원본에 박스를 그린 PNG도 남긴다")
+    pipeline = commands.add_parser("pipeline", help="빈칸 생성과 품질 검사를 실행한다")
+    _add_common(pipeline)
+    pipeline.add_argument("--dump-stages", action="store_true")
+    pipeline.add_argument("--rule-only", action="store_true", help="Gemini를 호출하지 않는다")
     return parser
 
 
