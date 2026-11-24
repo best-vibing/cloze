@@ -198,7 +198,7 @@ def test_footer_line_is_split_at_large_gap() -> None:
     }
 
 
-def test_twoup_fixture_footers_and_cover_phrases_are_excluded() -> None:
+def test_twoup_fixture_footers_and_upper_cover_are_excluded() -> None:
     pages = extract_tokens(TWOUP.read_bytes())
     reasons = _line_reasons(pages)
     for page in pages:
@@ -209,4 +209,4 @@ def test_twoup_fixture_footers_and_cover_phrases_are_excluded() -> None:
     assert reasons[1]["Kwon, Bokyung"] == {"Kwon,": "footer_phrase", "Bokyung": "footer_phrase"}
     assert reasons[1]["AI coding tools"] == {"AI": "too_short"}
     subtitle = reasons[1]["LLM, and generative AI coding tools"]
-    assert subtitle == {"and": "stopword", "AI": "too_short"}
+    assert subtitle == dict.fromkeys("LLM, and generative AI coding tools".split(), "noncontent")
