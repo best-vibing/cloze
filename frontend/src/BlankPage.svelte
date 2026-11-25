@@ -1,7 +1,7 @@
 <script>
   // 쪽 하나: 가린 이미지 위에 빈칸 입력칸을 겹친다. 규칙은 채점·입력칸 설계 3.2, 코드는 스파이크(#57) Page.svelte에서 옮겼다.
   // 서버가 준 글자(hint 등)는 Svelte {…}로만 넣는다. {…}는 HTML로 해석하지 않는다.
-  let { page, values = $bindable(), onkeydown, onfocus } = $props();
+  let { page, values = $bindable(), broken, onkeydown, onfocus, onimageload, onimageerror, onretry } = $props();
 
   const MAX_GROW = 3; // 입력이 길어질 때 bbox 폭의 최대 몇 배까지 늘릴지
   const measure = document.createElement("canvas").getContext("2d");
@@ -35,30 +35,40 @@
     height={page.height_pt}
     style:aspect-ratio="{page.width_pt} / {page.height_pt}"
     loading="lazy"
+    onload={() => onimageload(page.page_no)}
+    onerror={() => onimageerror(page.page_no)}
   />
-  {#each blanks as blank (blank.blank_id)}
-    {@const [x0, y0, x1, y1] = blank.bbox}
-    <input
-      id="blank-{blank.blank_id}"
-      class="blank"
-      type="text"
-      autocomplete="off"
-      autocapitalize="off"
-      spellcheck="false"
-      aria-label="페이지 {page.page_no}, 빈칸 {blank.order}"
-      style:left="{x0 * 100}%"
-      style:top="{y0 * 100}%"
-      style:height="{(y1 - y0) * 100}%"
-      style:width="{widths[blank.blank_id] ?? (x1 - x0) * 100}cqw"
-      style:--font-ratio={blank.style.font_size_ratio}
-      style:--font-color={blank.style.font_color}
-      style:--bg-color={blank.style.bg_color}
-      bind:value={values[blank.blank_id]}
-      oninput={(e) => grow(e, blank)}
-      onkeydown={(e) => onkeydown(e, blank.blank_id)}
-      onfocus={() => onfocus(blank)}
-    />
-  {/each}
+  {#if broken}
+    <div class="broken" role="alert">
+      <p>{page.page_no}쪽 그림을 불러오지 못했어요.</p>
+      <button type="button" onclick={() => onretry(page.page_no)}>다시 불러오기</button>
+    </div>
+  {:else}
+    <!-- 그림이 없는 쪽에서는 입력칸을 그리지 않는다. 입력한 값은 부모(values)에 남아 다시 불러오면 돌아온다. -->
+    {#each blanks as blank (blank.blank_id)}
+      {@const [x0, y0, x1, y1] = blank.bbox}
+      <input
+        id="blank-{blank.blank_id}"
+        class="blank"
+        type="text"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        aria-label="페이지 {page.page_no}, 빈칸 {blank.order}"
+        style:left="{x0 * 100}%"
+        style:top="{y0 * 100}%"
+        style:height="{(y1 - y0) * 100}%"
+        style:width="{widths[blank.blank_id] ?? (x1 - x0) * 100}cqw"
+        style:--font-ratio={blank.style.font_size_ratio}
+        style:--font-color={blank.style.font_color}
+        style:--bg-color={blank.style.bg_color}
+        bind:value={values[blank.blank_id]}
+        oninput={(e) => grow(e, blank)}
+        onkeydown={(e) => onkeydown(e, blank.blank_id)}
+        onfocus={() => onfocus(blank)}
+      />
+    {/each}
+  {/if}
 </section>
 
 <style>
@@ -97,5 +107,23 @@
     z-index: 1;
     border-bottom-color: var(--accent);
     box-shadow: -3px 0 0 var(--accent), 0 2px 8px rgb(0 0 0 / 0.25);
+  }
+  .broken {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 8px;
+    background: var(--surface);
+    color: var(--danger);
+    text-align: center;
+  }
+  .broken p {
+    margin: 0;
+  }
+  .broken button {
+    font: inherit;
   }
 </style>

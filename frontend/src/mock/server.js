@@ -10,6 +10,8 @@
 //                 업로드가 그 코드로 거절된다(계약 3절)
 //   lost_response 업로드를 서버는 받았는데 응답이 끊긴다(키마다 처음 한 번). 같은 키로 다시 보내면 같은 세트가 온다
 //   gateway_timeout 업로드를 서버는 받았는데 프록시가 본문 없는 504를 준다(키마다 처음 한 번). 다시 보내면 같은 세트
+//   image_expired 끝난 세트를 처음 조회했을 때 받은 이미지 주소가 열리지 않는다(만료). 다시 조회하면 새 주소가 열린다
+//   image_missing 이미지 주소가 늘 열리지 않는다. 화면은 한 번 다시 조회한 뒤 쪽마다 오류를 보인다
 // 처리 중(queued·running)인 세트에 답안을 내면 어느 시나리오든 409 not_ready다.
 // 확장자가 .pdf가 아니면 415 not_pdf, 20MB를 넘으면 413 file_too_large는 시나리오와 상관없이 낸다.
 // 같은 PDF를 다시 올렸을 때 기존 document_id를 돌려주는 것(계약 2절 POST /documents)은 흉내 내지 않는다.
@@ -174,9 +176,10 @@ function getBlankSet(_init, setId) {
     preset_reason: status === "queued" ? null : "강의 슬라이드로 보여 개념 용어 방식을 골랐어요",
     pages: [],
   };
-  if (status === "done") body.pages = PAGES;
+  if (status === "done" || status === "partial") set.finishedPolls += 1;
   // partial에서 실패한 쪽은 pages에 넣지 않는다(계약 2절 GET /blank-sets/{id}, #93).
-  if (status === "partial") body.pages = PAGES.slice(0, 1);
+  if (status === "done") body.pages = PAGES.map((p) => withImage(p, set));
+  if (status === "partial") body.pages = PAGES.slice(0, 1).map((p) => withImage(p, set));
   if (status === "failed") {
     body.error = { code: "unreadable_pdf", message: "인식이 잘 안 됐어요, 다시 올려 주세요." };
   }
@@ -246,6 +249,19 @@ function blank(blankId, order, bbox, hint) {
   };
 }
 
+/**
+ * 조회할 때마다 새 서명이 붙는 것을 흉내 내, 주소 끝에 몇 번째 조회인지 붙인다(#로 붙여 그림에는 영향이 없다).
+ * image_expired는 끝난 뒤 첫 조회의 주소만, image_missing은 모든 주소를 열리지 않게 만든다.
+ */
+function withImage(p, set) {
+  const broken = scenario === "image_missing" || (scenario === "image_expired" && set.finishedPolls === 1);
+  const url = broken ? BROKEN_IMAGE : p.image_url;
+  return { ...p, image_url: `${url}#poll-${set.polls}` };
+}
+
+// 열리지 않는 그림 주소. 실제로는 만료·위조된 서명이나 지워진 파일이다.
+const BROKEN_IMAGE = "data:image/webp;base64,AAAA";
+
 /** 실제 서명 URL 대신 쓰는 회색 그림(720×540). */
 function placeholderImage(pageNo) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="540"><rect width="100%" height="100%" fill="#f4f4f5"/><text x="24" y="48" font-size="24" fill="#71717a">Mock page ${pageNo}</text></svg>`;
@@ -259,6 +275,7 @@ function newSet(documentId, preset) {
     preset_applied: preset === "auto" ? "concept" : preset,
     created_at: new Date().toISOString(),
     polls: 0,
+    finishedPolls: 0, // 끝난 상태로 조회된 횟수(image_expired 시나리오용)
     revealed: false,
   };
 }
