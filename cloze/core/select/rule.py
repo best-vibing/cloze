@@ -125,8 +125,11 @@ def select_rule(
 
 
 def target_count(page: PageTokens, candidates: PageCandidates, policy: Policy) -> int:
-    """목표 빈칸 수. 문제 영역(question_region)을 뺀 단어 수에 비례한다."""
-    countable = len(page.tokens) - excluded_count(candidates, "question_region")
+    """목표 빈칸 수. 문제 영역과 비학습 영역을 뺀 단어 수에 비례한다."""
+    excluded = excluded_count(candidates, "question_region") + excluded_count(
+        candidates, "noncontent"
+    )
+    countable = len(page.tokens) - excluded
     return round(countable * policy.density / 100)
 
 
@@ -139,7 +142,10 @@ def _rank(page: PageTokens, candidates: PageCandidates, seed: int, stats: DocSta
     tokens = sorted((token for token in page.tokens if token.id in allowed), key=lambda t: t.id)
     if not tokens:
         return []
-    median = statistics.median(token.font_size for token in page.tokens)
+    noncontent = {item.id for item in candidates.excluded if item.reason == "noncontent"}
+    median = statistics.median(
+        token.font_size for token in page.tokens if token.id not in noncontent
+    )
     units = _units(tokens, median)
     # 보안 용도가 아니라, 같은 입력에 같은 결과를 내면서 동점 순서만 정하는 난수다.
     # 구가 없는 페이지는 units가 토큰 순서 그대로라 구를 넣기 전과 같은 순서로 섞인다.

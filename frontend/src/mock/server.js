@@ -6,15 +6,38 @@
 //   partial       queued → running → partial (2쪽 처리 실패)
 //   failed        queued → running → failed (unreadable_pdf)
 //   unauthorized  로그인 전 상태. 로그인 외 모든 요청이 401 unauthorized
+//   encrypted_pdf · too_many_pages · daily_limit_exceeded · too_many_running · service_limit_exceeded
+//                 업로드가 그 코드로 거절된다(계약 3절)
+//   lost_response 업로드를 서버는 받았는데 응답이 끊긴다(키마다 처음 한 번). 같은 키로 다시 보내면 같은 세트가 온다
+//   gateway_timeout 업로드를 서버는 받았는데 프록시가 본문 없는 504를 준다(키마다 처음 한 번). 다시 보내면 같은 세트
+//   image_expired 끝난 세트를 처음 조회했을 때 받은 이미지 주소가 열리지 않는다(만료). 다시 조회하면 새 주소가 열린다
+//   image_missing 이미지 주소가 늘 열리지 않는다. 화면은 한 번 다시 조회한 뒤 쪽마다 오류를 보인다
+//   attempt_lost  세트마다 첫 답안 제출과 시도마다 첫 정답 공개가, 서버는 처리했는데 응답이 끊긴다. 다시 누르면 된다
+//   session_expired 풀이 화면까지는 되고, 답안 제출과 정답 공개만 401 unauthorized(로그인이 풀린 경우)
 // 처리 중(queued·running)인 세트에 답안을 내면 어느 시나리오든 409 not_ready다.
+// 확장자가 .pdf가 아니면 415 not_pdf, 20MB를 넘으면 413 file_too_large는 시나리오와 상관없이 낸다.
 // 같은 PDF를 다시 올렸을 때 기존 document_id를 돌려주는 것(계약 2절 POST /documents)은 흉내 내지 않는다.
+//
+// 데모 세트(업로드 없이 풀이 화면 보기): #/sets/6f1c2a4e-0000-4000-8000-000000000001
 
-export const DEMO_SET_ID = "6f1c2a4e-0000-4000-8000-000000000001";
+const DEMO_SET_ID = "6f1c2a4e-0000-4000-8000-000000000001";
 const DEMO_DOCUMENT_ID = "0d0c0000-0000-4000-8000-000000000001";
 const LATENCY_MS = 200;
 const POLLS_UNTIL_FINISHED = 2; // 조회 1번째 queued, 2번째 running, 3번째부터 끝난 상태
 
 const scenario = new URLSearchParams(globalThis.location?.search ?? "").get("scenario") ?? "done";
+
+// 서버 설정 Settings.upload_max_bytes 기본값(#101)과 같게. 화면 쪽 값은 messages.js의 LIMITS.
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+// 시나리오 이름 → 업로드 거절. 문장은 서버가 줄 법한 예시이고, 화면은 이 문장을 그대로 보여 준다.
+// "30쪽"은 서버 설정 upload_max_pages 기본값(#101)이다.
+const UPLOAD_REJECTIONS = {
+  encrypted_pdf: [422, "암호가 걸렸거나 스크립트가 든 PDF는 올릴 수 없어요."],
+  too_many_pages: [422, "30쪽까지 올릴 수 있어요."],
+  daily_limit_exceeded: [429, "오늘 처리할 수 있는 쪽 수를 넘었어요."],
+  too_many_running: [429, "진행 중인 작업이 너무 많아요."],
+  service_limit_exceeded: [503, "오늘은 더 만들 수 없어요."],
+};
 
 // 정답은 이 안에만 둔다. 조회 응답(getBlankSet)에는 절대 넣지 않는다(D2).
 const ANSWERS = new Map([
@@ -38,6 +61,7 @@ const state = {
   documents: new Map([[DEMO_DOCUMENT_ID, { filename: "세포생물학-3주차.pdf", sets: [DEMO_SET_ID] }]]),
   attempts: new Map(), // attempt_id → {set_id, submitted_at, score, after_reveal, revealed_at}
   idempotency: new Map(), // "경로 키" → {fingerprint: 요청 내용, response: 처음 돌려준 응답}
+  lostKeys: new Set(), // lost_response·gateway_timeout·attempt_lost 시나리오에서 응답을 한 번 끊은 키·요청
 };
 
 const ROUTES = [
@@ -94,14 +118,28 @@ function uploadDocument(init) {
   const preset = init.body.get("preset") ?? "auto";
   // 실패한 요청은 키에 남기지 않는다. 남기면 PDF로 바꿔 같은 키로 다시 올려도 계속 415가 나온다.
   if (!file?.name?.toLowerCase().endsWith(".pdf")) return error(415, "not_pdf", "PDF 파일만 올릴 수 있어요.");
+  if (file.size > MAX_UPLOAD_BYTES) return error(413, "file_too_large", "파일이 너무 커요.");
+  if (scenario in UPLOAD_REJECTIONS) {
+    const [status, message] = UPLOAD_REJECTIONS[scenario];
+    return error(status, scenario, message);
+  }
   // 지문은 Mock이라 파일 이름·크기·방식으로 대신한다(계약의 sha256은 서버 몫).
-  return once(init, "POST /documents", `${file.name}:${file.size}:${preset}`, () => {
+  const response = once(init, "POST /documents", `${file.name}:${file.size}:${preset}`, () => {
     const documentId = crypto.randomUUID();
     const setId = crypto.randomUUID();
     state.sets.set(setId, newSet(documentId, preset));
     state.documents.set(documentId, { filename: file.name, sets: [setId] });
     return reply(202, { document_id: documentId, blank_set_id: setId });
   });
+  const key = init.headers["Idempotency-Key"];
+  const cutOnce = ["lost_response", "gateway_timeout"].includes(scenario);
+  if (cutOnce && response.ok && !state.lostKeys.has(key)) {
+    state.lostKeys.add(key);
+    if (scenario === "lost_response") throw new TypeError("Failed to fetch"); // fetch가 응답을 못 받았을 때와 같은 오류
+    // 프록시(Tailscale 등)의 시간 초과는 계약 3절 모양이 아닌 HTML 본문으로 온다.
+    return new Response("<html><body>504 Gateway Timeout</body></html>", { status: 504 });
+  }
+  return response;
 }
 
 function deleteDocument(_init, documentId) {
@@ -140,9 +178,10 @@ function getBlankSet(_init, setId) {
     preset_reason: status === "queued" ? null : "강의 슬라이드로 보여 개념 용어 방식을 골랐어요",
     pages: [],
   };
-  if (status === "done") body.pages = PAGES;
+  if (status === "done" || status === "partial") set.finishedPolls += 1;
   // partial에서 실패한 쪽은 pages에 넣지 않는다(계약 2절 GET /blank-sets/{id}, #93).
-  if (status === "partial") body.pages = PAGES.slice(0, 1);
+  if (status === "done") body.pages = PAGES.map((p) => withImage(p, set));
+  if (status === "partial") body.pages = PAGES.slice(0, 1).map((p) => withImage(p, set));
   if (status === "failed") {
     body.error = { code: "unreadable_pdf", message: "인식이 잘 안 됐어요, 다시 올려 주세요." };
   }
@@ -150,6 +189,8 @@ function getBlankSet(_init, setId) {
 }
 
 function submitAttempt(init, setId) {
+  // 실제 서버처럼 로그인 확인을 404·409보다 먼저 한다.
+  if (scenario === "session_expired") return sessionExpired();
   const set = state.sets.get(setId);
   if (!set) return notFound();
   if (["queued", "running"].includes(statusOf(set))) {
@@ -157,10 +198,9 @@ function submitAttempt(init, setId) {
   }
   const { answers } = JSON.parse(init.body);
   const blankIds = shownBlankIds(set);
-  // 화면 시험용 가짜 채점: 대소문자·앞뒤 공백만 무시한다. 진짜 판정은 서버 cloze/core/grade(#55)가 기준이다.
-  const results = Object.fromEntries(
-    blankIds.map((id) => [id, same(answers[id] ?? "", ANSWERS.get(id)) ? "correct" : "wrong"]),
-  );
+  // 화면 시험용 가짜 채점: 대소문자·앞뒤 공백만 무시하고, 5자 이상 정답에서 한 글자 차이는 near다.
+  // 진짜 판정은 서버 cloze/core/grade(#55)가 기준이다.
+  const results = Object.fromEntries(blankIds.map((id) => [id, judge(answers[id] ?? "", ANSWERS.get(id))]));
   const correct = Object.values(results).filter((r) => r === "correct").length;
   const attempt = {
     attempt_id: crypto.randomUUID(),
@@ -171,6 +211,8 @@ function submitAttempt(init, setId) {
     revealed_at: null,
   };
   state.attempts.set(attempt.attempt_id, attempt);
+  // 시도는 저장했는데 응답이 끊긴 경우. 다시 내면 시도가 하나 더 생긴다(계약상 제출에는 Idempotency-Key가 없다).
+  if (cutOnce(`submit ${setId}`)) throw new TypeError("Failed to fetch");
   const { attempt_id, score, after_reveal } = attempt;
   return reply(200, { attempt_id, results, score, after_reveal });
 }
@@ -186,11 +228,14 @@ function listAttempts(_init, setId) {
 }
 
 function revealAttempt(_init, attemptId) {
+  if (scenario === "session_expired") return sessionExpired();
   const attempt = state.attempts.get(attemptId);
   if (!attempt) return notFound();
   const set = state.sets.get(attempt.set_id);
+  if (!set) return notFound(); // 문서를 지워 세트가 사라졌다
   attempt.revealed_at ??= new Date().toISOString();
   set.revealed = true; // 이후 시도는 after_reveal: true
+  if (cutOnce(`reveal ${attemptId}`)) throw new TypeError("Failed to fetch");
   const answers = Object.fromEntries(shownBlankIds(set).map((id) => [id, ANSWERS.get(id)]));
   return reply(200, { answers });
 }
@@ -212,6 +257,19 @@ function blank(blankId, order, bbox, hint) {
   };
 }
 
+/**
+ * 조회할 때마다 새 서명이 붙는 것을 흉내 내, 주소 끝에 몇 번째 조회인지 붙인다(#로 붙여 그림에는 영향이 없다).
+ * image_expired는 끝난 뒤 첫 조회의 주소만, image_missing은 모든 주소를 열리지 않게 만든다.
+ */
+function withImage(p, set) {
+  const broken = scenario === "image_missing" || (scenario === "image_expired" && set.finishedPolls === 1);
+  const url = broken ? BROKEN_IMAGE : p.image_url;
+  return { ...p, image_url: `${url}#poll-${set.polls}` };
+}
+
+// 열리지 않는 그림 주소. 실제로는 만료·위조된 서명이나 지워진 파일이다.
+const BROKEN_IMAGE = "data:image/webp;base64,AAAA";
+
 /** 실제 서명 URL 대신 쓰는 회색 그림(720×540). */
 function placeholderImage(pageNo) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="540"><rect width="100%" height="100%" fill="#f4f4f5"/><text x="24" y="48" font-size="24" fill="#71717a">Mock page ${pageNo}</text></svg>`;
@@ -225,6 +283,7 @@ function newSet(documentId, preset) {
     preset_applied: preset === "auto" ? "concept" : preset,
     created_at: new Date().toISOString(),
     polls: 0,
+    finishedPolls: 0, // 끝난 상태로 조회된 횟수(image_expired 시나리오용)
     revealed: false,
   };
 }
@@ -240,9 +299,29 @@ function shownBlankIds(set) {
   return pages.flatMap((p) => p.blanks.map((b) => b.blank_id));
 }
 
-function same(given, answer) {
+function judge(given, answer) {
   const norm = (s) => s.normalize("NFKC").trim().toLowerCase();
-  return norm(given) !== "" && norm(given) === norm(answer);
+  const [a, b] = [norm(given), norm(answer)];
+  if (a === "") return "wrong";
+  if (a === b) return "correct";
+  return b.length >= 5 && withinOneEdit(a, b) ? "near" : "wrong";
+}
+
+/** 글자 하나를 바꾸거나 넣거나 빼서 같아지는가(편집 거리 1). */
+function withinOneEdit(a, b) {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+  const rest = (x, skip) => x.slice(i + skip);
+  if (a.length === b.length) return rest(a, 1) === rest(b, 1);
+  return a.length > b.length ? rest(a, 1) === rest(b, 0) : rest(a, 0) === rest(b, 1);
+}
+
+/** attempt_lost 시나리오에서 이 이름의 요청을 처음 한 번만 끊는다. */
+function cutOnce(name) {
+  if (scenario !== "attempt_lost" || state.lostKeys.has(name)) return false;
+  state.lostKeys.add(name);
+  return true;
 }
 
 /**
@@ -274,4 +353,8 @@ function error(status, code, message) {
 
 function notFound() {
   return error(404, "not_found", "찾을 수 없어요.");
+}
+
+function sessionExpired() {
+  return error(401, "unauthorized", "로그인이 필요해요.");
 }
