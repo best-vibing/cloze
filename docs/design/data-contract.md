@@ -34,7 +34,7 @@
 
 규칙 기반 선택기(`select/rule`)는 `ask_llm` 대신 문서 통계(`doc_stats`: 정규화한 단어의 빈도, 제목급 줄의 단어)를 받는다.
 
-`spans`의 칸 하나는 토큰 하나이거나, 같은 줄에서 id가 이어진 여러 토큰(구)이다. 지금 구를 만드는 것은 규칙 기반 선택기뿐이고, Gemini 응답 스키마와 게이트는 후속이다([선택 3절](selection-and-quality-gate.md#3-프롬프트-입력-형식)).
+`spans`의 칸 하나는 토큰 하나이거나, 같은 줄에서 id가 이어진 여러 토큰(구)이다. 지금 구를 만드는 것은 규칙 기반 선택기뿐이다. 게이트는 구를 받되 같은 줄에서 id가 이어지지 않거나 규칙 선택기의 최대 길이를 넘으면 `invalid_span`으로 버린다. Gemini 응답 스키마는 한 단어만 받고, 구는 후속이다([선택 3절](selection-and-quality-gate.md#3-프롬프트-입력-형식)).
 
 추출 토큰(`Token`)과 선택기 출력(`Selection`)의 필드·허용값은 [`core/models.py`](../../cloze/core/models.py)가 기준이다. 선택기 출력의 `source`는 `gemini / rule`이며, 페이지 결과의 `selection.source`와는 구분한다(1.4절). 빈칸이 없을 때의 `none`은 파이프라인이 붙이며 `Selection` 모델에는 포함하지 않는다.
 
