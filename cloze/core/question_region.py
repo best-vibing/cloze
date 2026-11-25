@@ -38,7 +38,7 @@ def question_region_ids(pages: list[PageTokens], header_footer: set[Key]) -> set
         if not marked:
             continue
         repeated = {id_ for no, id_ in header_footer if no == page_no}
-        boundaries = _boundaries(page, repeated)
+        boundaries = slide_boundaries(page, repeated)
         for line in marked:
             region = _region(lines, line, boundaries, repeated)
             found |= {(page_no, token.id) for tokens in region for token in tokens}
@@ -70,7 +70,7 @@ def _bottom(line: Line) -> float:
     return max(token.bbox[3] for token in line)
 
 
-def _boundaries(page: PageTokens, header_footer_ids: set[int]) -> list[float]:
+def slide_boundaries(page: PageTokens, header_footer_ids: set[int]) -> list[float]:
     """슬라이드 경계: 반복 머리글·바닥글 줄 중 글자가 가장 작은 줄들의 top. 제목이 반복되는 경우를
     바닥글과 구분하기 위해서다. 단서가 없으면 빈 목록이다."""
     repeated = [line for line in _lines(page) if all(t.id in header_footer_ids for t in line)]
