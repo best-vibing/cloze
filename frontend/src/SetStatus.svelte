@@ -1,10 +1,12 @@
 <script>
   // 세트 하나를 2초마다 조회해 상태와 진행률을 보여 주고, 끝나면(done·partial) 쪽마다 입력칸을 겹쳐 그린다(#58).
-  // 서버와는 api.js로만 주고받는다. fetch를 여기서 부르지 않는다. 제출·정답 공개는 #36에서 붙인다.
-  import { onMount } from "svelte";
-  import { ApiError, getBlankSet } from "./api.js";
+  // 답안 제출 → 칸별 결과·점수 → 정답 공개 → 다시 풀기(#36)도 여기서 한다. 규칙은 채점·입력칸 설계 2절.
+  // 서버와는 api.js로만 주고받는다. fetch를 여기서 부르지 않는다.
+  import { onMount, tick } from "svelte";
+  import { ApiError, getBlankSet, revealAttempt, submitAttempt } from "./api.js";
   import BlankPage from "./BlankPage.svelte";
   import { blockedByIme, trackComposition } from "./ime.js";
+  import { attemptErrorMessage } from "./messages.js";
 
   let { setId } = $props();
 
@@ -20,7 +22,7 @@
 
   let blankSet = $state(null);
   let problem = $state("");
-  let values = $state({}); // blank_id → 입력. 제출(#36)할 때 이 값을 보낸다. 이미지 주소를 새로 받아도 남는다.
+  let values = $state({}); // blank_id → 입력. 제출할 때 이 값을 보낸다. 이미지 주소를 새로 받아도 남는다.
   let hint = $state("");
   let broken = $state({}); // page_no → true: 새 주소로도 그림을 못 불러온 쪽
 
@@ -120,6 +122,74 @@
   function onfocus(blank) {
     hint = blank.hint ? `힌트: ${blank.hint}` : "";
   }
+
+  // ---- 제출·정답 공개·다시 풀기 (#36, 계약 2절 attempts) ----
+  // 제출과 정답 공개에는 횟수 제한이 없다. 정답을 본 뒤의 시도인지(after_reveal)는 서버가 정해서 돌려준다.
+  let attempt = $state(null); // 마지막 제출 결과 {attempt_id, results, score, after_reveal}. null이면 푸는 중
+  let answers = $state(null); // 공개한 정답 {blank_id: 정답}. null이면 아직 안 봤다
+  let showAnswers = $state(false); // 칸에 정답을 보이는 중인가(false면 내 답)
+  let busy = $state(""); // "submit" · "reveal": 요청을 기다리는 중. 두 번 눌러 두 번 보내지 않게 막는다
+  let asking = $state(false); // 빈 칸이 있어 "그대로 제출할까요?"를 묻는 중
+  let actionProblem = $state("");
+
+  // 그림을 못 불러온 쪽의 칸도 보낸다. 입력값은 values에 남아 있고, 빠지면 서버가 그 칸을 틀림으로 센다.
+  const blankIds = $derived(pages.flatMap((p) => p.blanks.map((b) => b.blank_id)));
+  const emptyCount = $derived(blankIds.filter((id) => !(values[id] ?? "").trim()).length);
+  const tally = $derived(
+    attempt
+      ? Object.values(attempt.results).reduce((n, r) => ({ ...n, [r]: (n[r] ?? 0) + 1 }), {})
+      : {},
+  );
+
+  async function submit(force) {
+    if (busy) return;
+    // 빈 칸은 틀림이 된다. 실수로 누른 것일 수 있어 한 번 묻는다.
+    if (emptyCount > 0 && !force) {
+      asking = true;
+      return;
+    }
+    asking = false;
+    busy = "submit";
+    actionProblem = "";
+    try {
+      const sent = Object.fromEntries(blankIds.map((id) => [id, values[id] ?? ""]));
+      attempt = await submitAttempt(setId, sent);
+    } catch (e) {
+      // 응답이 끊겼으면 서버는 시도를 저장했을 수 있다. 다시 내면 시도가 하나 더 쌓일 뿐 점수는 같다.
+      actionProblem = attemptErrorMessage(e);
+    } finally {
+      busy = "";
+    }
+  }
+
+  async function reveal() {
+    if (busy || !attempt) return;
+    busy = "reveal";
+    actionProblem = "";
+    try {
+      const revealed = await revealAttempt(attempt.attempt_id);
+      // 계약상 늘 오지만, 빠지면 칸을 그리다 깨지므로 빈 정답표로 둔다(칸은 빈 글자로 보인다).
+      answers = revealed?.answers ?? {};
+      showAnswers = true;
+    } catch (e) {
+      actionProblem = attemptErrorMessage(e);
+    } finally {
+      busy = "";
+    }
+  }
+
+  /** 같은 세트로 새로 푼다. 입력을 비우고 첫 칸으로 간다. 정답을 봤으면 다음 시도는 서버가 복습으로 기록한다. */
+  async function retry() {
+    if (busy) return;
+    attempt = null;
+    answers = null;
+    showAnswers = false;
+    asking = false;
+    actionProblem = "";
+    values = {};
+    await tick();
+    document.getElementById(`blank-${order[0]}`)?.focus();
+  }
 </script>
 
 <main>
@@ -159,6 +229,9 @@
       <BlankPage
         {page}
         bind:values
+        results={attempt?.results ?? null}
+        {answers}
+        {showAnswers}
         broken={broken[page.page_no] ?? false}
         {onkeydown}
         {onfocus}
@@ -168,8 +241,46 @@
       />
     {/each}
   </div>
-  <footer class="hint">
-    <p role="status">{hint}</p>
+  <footer class="bar">
+    <p class="hint" role="status">{hint}</p>
+    <div class="summary" aria-live="polite">
+      {#if attempt}
+        <p>
+          <strong>{Math.round(attempt.score * 100)}점</strong>
+          · 맞음 {tally.correct ?? 0} · 거의 맞음 {tally.near ?? 0} · 틀림 {tally.wrong ?? 0}
+        </p>
+        {#if tally.near}<p class="muted">거의 맞음(한 글자 차이)은 점수에 넣지 않았어요.</p>{/if}
+        {#if attempt.after_reveal}<p class="muted">정답을 본 뒤의 풀이라 복습으로 기록했어요.</p>{/if}
+      {/if}
+    </div>
+    <p class="problem" role="alert">{actionProblem}</p>
+    <div class="actions">
+      {#if !attempt}
+        {#if asking && emptyCount > 0}
+          <span>빈칸 {emptyCount}개가 비어 있어요. 빈 칸은 틀림이 돼요.</span>
+          <button type="button" onclick={() => (asking = false)}>계속 풀기</button>
+          <button type="button" class="primary" disabled={busy !== ""} onclick={() => submit(true)}>
+            {busy === "submit" ? "채점하는 중…" : "그대로 제출"}
+          </button>
+        {:else}
+          <button type="button" class="primary" disabled={busy !== ""} onclick={() => submit(false)}>
+            {busy === "submit" ? "채점하는 중…" : "제출"}
+          </button>
+        {/if}
+      {:else}
+        {#if answers === null}
+          <button type="button" class="primary" disabled={busy !== ""} onclick={reveal}>
+            {busy === "reveal" ? "정답을 불러오는 중…" : "정답 보기"}
+          </button>
+        {:else}
+          <div class="toggle" role="group" aria-label="칸에 보일 글자">
+            <button type="button" aria-pressed={!showAnswers} onclick={() => (showAnswers = false)}>내 답</button>
+            <button type="button" aria-pressed={showAnswers} onclick={() => (showAnswers = true)}>정답</button>
+          </div>
+        {/if}
+        <button type="button" disabled={busy !== ""} onclick={retry}>다시 풀기</button>
+      {/if}
+    </div>
   </footer>
 {/if}
 
@@ -196,18 +307,65 @@
     margin: 0 auto;
     padding: 0 16px 16px;
   }
-  .hint {
+  /* 아래 막대: 힌트, 채점 결과, 제출·정답 보기·다시 풀기. 쪽을 내려 봐도 늘 보인다. */
+  .bar {
     position: sticky;
     bottom: 0;
-    padding: 6px 16px;
+    display: grid;
+    gap: 6px;
+    padding: 8px 16px;
     background: var(--surface);
     border-top: 1px solid var(--line);
     font-size: 0.9rem;
   }
-  .hint p {
+  .bar p {
     margin: 0;
   }
-  .hint:has(p:empty) {
+  .hint:empty,
+  .summary:empty {
     display: none;
+  }
+  .muted {
+    color: var(--muted);
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  button {
+    font: inherit;
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+  button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
+  .toggle {
+    display: inline-flex;
+  }
+  .toggle button:first-child {
+    border-radius: 8px 0 0 8px;
+  }
+  .toggle button:last-child {
+    border-radius: 0 8px 8px 0;
+    border-left: 0;
+  }
+  .toggle button[aria-pressed="true"] {
+    background: var(--accent-weak);
+    border-color: var(--accent);
+    font-weight: 600;
   }
 </style>

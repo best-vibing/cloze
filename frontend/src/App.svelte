@@ -27,6 +27,8 @@
     --accent: #4f46e5;
     --accent-weak: #e7e6fd;
     --danger: #b91c1c;
+    --correct: #15803d;
+    --near: #b45309;
     font-family: system-ui, "Malgun Gothic", sans-serif;
     color: var(--text);
   }
