@@ -17,3 +17,7 @@ out/
 
 # 로컬 파일 저장소(업로드 원본·이미지)
 data/
+
+# 프론트: 내려받은 라이브러리와 빌드 결과
+node_modules/
+frontend/**/dist/
