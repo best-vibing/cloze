@@ -114,8 +114,11 @@ def select_rule(
 
 
 def target_count(page: PageTokens, candidates: PageCandidates, policy: Policy) -> int:
-    """목표 빈칸 수. 문제 영역(question_region)을 뺀 단어 수에 비례한다."""
-    countable = len(page.tokens) - excluded_count(candidates, "question_region")
+    """목표 빈칸 수. 문제 영역과 비학습 영역을 뺀 단어 수에 비례한다."""
+    excluded = excluded_count(candidates, "question_region") + excluded_count(
+        candidates, "noncontent"
+    )
+    countable = len(page.tokens) - excluded
     return round(countable * policy.density / 100)
 
 
@@ -124,7 +127,10 @@ def _rank(page: PageTokens, candidates: PageCandidates, seed: int, stats: DocSta
     tokens = [token for token in page.tokens if token.id in allowed]
     if not tokens:
         return []
-    median = statistics.median(token.font_size for token in page.tokens)
+    noncontent = {item.id for item in candidates.excluded if item.reason == "noncontent"}
+    median = statistics.median(
+        token.font_size for token in page.tokens if token.id not in noncontent
+    )
     # 보안 용도가 아니라, 같은 입력에 같은 결과를 내면서 동점 순서만 정하는 난수다.
     random.Random(seed).shuffle(tokens)  # nosec B311
     return sorted(tokens, key=lambda token: -round(score_token(token, median, stats), SCORE_DIGITS))

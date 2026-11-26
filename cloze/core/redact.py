@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageStat
 
 from cloze.core.extract.render import PixelBox, pixel_box
-from cloze.core.models import BBox, PageTokens
+from cloze.core.gate import PAD_RATIO as PAD_RATIO
+from cloze.core.gate import blank_bbox as blank_bbox
+from cloze.core.models import BBox
 
-# [가설] 패딩: 줄 높이(묶인 토큰 중 가장 큰 글자 크기)에 이 비율을 곱해 사방에 더한다.
-PAD_RATIO = 0.15
 # [가설] 배경색을 잴 박스 바깥 띠의 두께(px). long_side_px=2000 기준이다.
 BAND_PX = 3
 # [가설] WebP 품질(pdf-extraction.md 3절).
@@ -24,37 +24,6 @@ type RGB = tuple[int, int, int]
 class RedactResult:
     image: Image.Image
     colors: list[str]  # 칸마다 칠한 색(#rrggbb), boxes와 같은 순서
-
-
-def blank_bbox(page: PageTokens, span: list[int], pad_ratio: float = PAD_RATIO) -> BBox:
-    """묶인 토큰 bbox의 합집합에 패딩을 더하고 0~1로 자른다. gate가 생기면 그쪽으로 옮긴다.
-    앞뒤 문장 부호는 칠하지 않도록, 토큰에 word_bbox가 있으면 그것을 쓴다."""
-    tokens = [token for token in page.tokens if token.id in set(span)]
-    if not tokens:
-        raise ValueError(f"span {span}에 해당하는 토큰이 없다")
-    inner = _union([token.word_bbox or token.bbox for token in tokens])
-    outer = _union([token.bbox for token in tokens])
-    # 줄 높이는 bbox 높이가 아니라 글자 크기로 잰다. 세로로 쓰인(회전) 글은 bbox 높이가 단어 길이다.
-    # 패딩은 포인트로 정한 뒤 가로·세로 비율에 맞게 나눈다. 그래야 사방 두께가 같다.
-    pad_pt = max(token.font_size for token in tokens) * pad_ratio
-    pad_x, pad_y = pad_pt / page.page.width_pt, pad_pt / page.page.height_pt
-    # 부호를 뗀 변(합집합의 바깥 변이 bbox와 다른 쪽)에는 패딩을 붙이지 않는다. 패딩(12pt에서
-    # 1.8pt)이 글자와 부호 사이 여백(약 1pt)보다 커서 부호를 덮는다.
-    # 변별로 비교하므로 회전 글도 같다.
-    x0, y0, x1, y1 = (
-        edge + pad if edge == full else edge
-        for edge, full, pad in zip(inner, outer, (-pad_x, -pad_y, pad_x, pad_y), strict=True)
-    )
-    return (_unit(x0), _unit(y0), _unit(x1), _unit(y1))
-
-
-def _union(boxes: list[BBox]) -> BBox:
-    return (
-        min(box[0] for box in boxes),
-        min(box[1] for box in boxes),
-        max(box[2] for box in boxes),
-        max(box[3] for box in boxes),
-    )
 
 
 def redact(image: Image.Image, boxes: list[BBox]) -> RedactResult:
@@ -111,7 +80,3 @@ def _band_region(box: PixelBox, size: tuple[int, int]) -> PixelBox:
 
 def _hex(color: RGB) -> str:
     return "#{:02x}{:02x}{:02x}".format(*color)
-
-
-def _unit(value: float) -> float:
-    return min(max(value, 0.0), 1.0)

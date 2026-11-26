@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from cloze.config import Settings
 
@@ -12,8 +13,12 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for name in (
         "CLOZE_GEMINI_API_KEY",
         "CLOZE_GEMINI_MODEL",
+        "CLOZE_GEMINI_TIMEOUT_S",
+        "CLOZE_GEMINI_MAX_CONCURRENCY",
         "CLOZE_SAMPLES_DIR",
         "CLOZE_DATABASE_URL",
+        "CLOZE_TASK_TIMEOUT_S",
+        "CLOZE_QUEUE_IDLE_TIMEOUT_MS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -22,7 +27,7 @@ def test_defaults_without_env() -> None:
     settings = Settings()
     assert settings.gemini_api_key is None
     assert settings.samples_dir is None
-    assert "@localhost:5432/" in settings.database_url.get_secret_value()
+    assert "@127.0.0.1:5432/" in settings.database_url.get_secret_value()
 
 
 def test_database_url_hidden_when_printed() -> None:
@@ -37,3 +42,21 @@ def test_reads_prefixed_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.gemini_api_key is not None
     assert settings.gemini_api_key.get_secret_value() == "test-key"
     assert settings.samples_dir == Path("/tmp/samples")
+
+
+def test_task_timeout_must_be_below_idle_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 같으면 처리 중인 작업이 다른 워커에 넘어가 두 번 실행될 수 있다(신뢰성 설계 2절).
+    monkeypatch.setenv("CLOZE_TASK_TIMEOUT_S", "900")
+    with pytest.raises(ValidationError, match="queue_idle_timeout_ms"):
+        Settings()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "invalid"])
+def test_invalid_concurrency_environment_is_rejected(
+    value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """양의 정수 이외 환경 설정은 기존 Pydantic 규칙으로 거절된다."""
+    monkeypatch.setenv("CLOZE_GEMINI_MAX_CONCURRENCY", value)
+    with pytest.raises(ValidationError) as captured:
+        Settings()
+    assert captured.value.errors()[0]["loc"] == ("gemini_max_concurrency",)
