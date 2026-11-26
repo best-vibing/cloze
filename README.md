@@ -89,4 +89,28 @@ uv run taskiq worker cloze.worker:broker --max-async-tasks 1  # 워커
 - 처리 중에 죽은 워커의 작업은 `idle_timeout`이 지난 **뒤 새 작업이 하나 들어올 때** 다른 워커가 넘겨받는다. 새 작업이 없으면 넘겨받지 않는다(PR의 재배달 실험).
 - 재배달 실험: idle을 줄여 워커를 띄우고(`CLOZE_TASK_TIMEOUT_S=30 CLOZE_QUEUE_IDLE_TIMEOUT_MS=60000 uv run taskiq worker cloze.worker:broker scripts.redelivery_experiment --max-async-tasks 1`), `uv run python -m scripts.redelivery_experiment B`로 등록한 뒤 "받음" 로그가 나오면 워커를 강제 종료한다.
 
+### 배포 (시연 기기)
+
+`develop`에 머지되면 `.github/workflows/image.yml`이 이미지를 `ghcr.io/best-vibing/cloze:develop`(과 `:sha-<커밋>`)으로 올린다. 시연 기기는 레포를 받아 두고 `deploy/compose.yml`로 그 이미지를 띄운다([ADR-007](docs/decisions/ADR-007-deploy-demo-machine-tailscale.md), 아키텍처 7장). 이미지는 공개라 로그인 없이 받는다.
+
+처음 한 번:
+
+```
+copy deploy\.env.example deploy\.env          # 값을 채운다(비밀번호·세션 키·Gemini 키·공개 주소)
+docker compose -f deploy/compose.yml up -d     # migrate가 먼저 돌고 api·worker가 뜬다
+docker compose -f deploy/compose.yml run --rm api python -m cloze.cli.accounts create-user <아이디> --display-name <이름>
+```
+
+새 이미지로 바꿀 때(이때도 migrate가 먼저 돈다):
+
+```
+docker compose -f deploy/compose.yml pull
+docker compose -f deploy/compose.yml up -d
+```
+
+- API는 `127.0.0.1:8000`에만 열린다. 바깥 노출은 호스트의 Tailscale이 맡는다. 개발 중에는 `tailscale serve --bg 8000`(같은 tailnet의 팀원만), 발표·리허설 때만 `tailscale funnel --bg 8000`(누구나), 끝나면 `tailscale funnel --bg off`.
+- 확인: `curl http://127.0.0.1:8000/health`가 `{"status":"ok"}`이고, 다른 팀원 기기에서 `https://<기기>.<tailnet>.ts.net/health`가 열리면 된다.
+- 되돌리기: `deploy/.env`의 `CLOZE_IMAGE_TAG`를 `sha-<이전 커밋>`으로 바꾸고 `up -d`. 마이그레이션은 추가만 하므로 옛 이미지도 새 테이블에서 돈다.
+- 데이터(`pgdata`·`storage` 볼륨)는 `down`으로는 남고 `down -v`를 붙이면 지워진다. 발표 뒤에 지운다.
+
 수업 PDF 같은 기준 자료는 저작권 때문에 레포에 넣지 않는다. 로컬 폴더에 두고 `CLOZE_SAMPLES_DIR`로 가리킨다. 테스트용으로 직접 만든 작은 PDF만 `tests/fixtures/`에 커밋한다.

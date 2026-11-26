@@ -1,0 +1,18 @@
+# 이미지에 넣지 않는다: 비밀값, 저작권 자료(수업 PDF), 빌드 산출물, 개발 도구 캐시
+.env
+deploy/.env
+samples/
+out/
+*.pdf
+.git/
+.github/
+.venv/
+**/__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+**/node_modules/
+frontend/dist/
+tests/
+docs/
+data/

@@ -1,4 +1,4 @@
-# 로컬 개발용. 배포 구성(ADR-007)은 F1에서 따로 만든다.
+# 로컬 개발용. 운영(시연 기기) 구성은 deploy/compose.yml이다(ADR-007).
 services:
   postgres:
     image: postgres:17
