@@ -103,10 +103,8 @@ def select_rule(
     avoid: set[int],
     doc_stats: DocStats,
 ) -> Selection:
-    """칸 하나는 토큰 하나다. 프리셋은 아직 concept뿐이라 preset 값으로 갈라지지 않는다.
-    목표 개수는 문제 영역(question_region)을 뺀 단어 수에 비례한다."""
-    countable = len(page.tokens) - excluded_count(candidates, "question_region")
-    target = round(countable * policy.density / 100)
+    """칸 하나는 토큰 하나다. 프리셋은 아직 concept뿐이라 preset 값으로 갈라지지 않는다."""
+    target = target_count(page, candidates, policy)
     ranked = _rank(page, candidates, policy.seed, doc_stats)
     # avoid에 든 토큰을 뒤로 보내, 후보가 모자랄 때만 다시 쓰이게 한다.
     fresh = [token for token in ranked if token.id not in avoid]
@@ -115,12 +113,24 @@ def select_rule(
     return Selection(spans=[[id_] for id_ in ids], slots=[Slot() for _ in ids], source="rule")
 
 
+def target_count(page: PageTokens, candidates: PageCandidates, policy: Policy) -> int:
+    """목표 빈칸 수. 문제 영역과 비학습 영역을 뺀 단어 수에 비례한다."""
+    excluded = excluded_count(candidates, "question_region") + excluded_count(
+        candidates, "noncontent"
+    )
+    countable = len(page.tokens) - excluded
+    return round(countable * policy.density / 100)
+
+
 def _rank(page: PageTokens, candidates: PageCandidates, seed: int, stats: DocStats) -> list[Token]:
     allowed = set(candidates.candidate_ids)
     tokens = [token for token in page.tokens if token.id in allowed]
     if not tokens:
         return []
-    median = statistics.median(token.font_size for token in page.tokens)
+    noncontent = {item.id for item in candidates.excluded if item.reason == "noncontent"}
+    median = statistics.median(
+        token.font_size for token in page.tokens if token.id not in noncontent
+    )
     # 보안 용도가 아니라, 같은 입력에 같은 결과를 내면서 동점 순서만 정하는 난수다.
     random.Random(seed).shuffle(tokens)  # nosec B311
     return sorted(tokens, key=lambda token: -round(score_token(token, median, stats), SCORE_DIGITS))

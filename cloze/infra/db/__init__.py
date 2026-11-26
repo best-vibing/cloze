@@ -27,8 +27,11 @@ class Base(DeclarativeBase):
 
 def make_engine(settings: Settings) -> AsyncEngine:
     # libpq는 기본으로 연결을 무한정 기다린다. DB가 응답하지 않으면 멈추지 않고 실패하게 한다.
+    # pool_pre_ping: 풀에서 꺼낼 때 연결이 살아 있는지 보고, DB 재시작으로 끊긴 연결은 새로 맺는다.
     return create_async_engine(
-        settings.database_url.get_secret_value(), connect_args={"connect_timeout": 5}
+        settings.database_url.get_secret_value(),
+        connect_args={"connect_timeout": 5},
+        pool_pre_ping=True,
     )
 
 

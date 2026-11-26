@@ -46,7 +46,7 @@ ADR-004(업로드할 때 제작 방식 선택)는 D3의 "작업 하나·상태 �
 
 | 구분 | 이름 | 이 서비스에서 | 위하는 것 |
 |---|---|---|---|
-| 스타일 | 모듈러 모놀리스 | 코드베이스 하나, 프로세스 둘(API + 워커) | D7 |
+| 스타일 | 모듈러 모놀리스 | 코드베이스 하나, 프로세스 둘(API + 워커). 주기 작업 쪽지만 넣는 스케줄러 하나를 따로 띄운다([ADR-011](decisions/ADR-011-periodic-jobs-scheduler.md)) | D7 |
 | 스타일 | 파이프 앤 필터 | 추출 → 분석 → 선택 → 게이트 → 가림(`core/pipeline`) | D5, D7 |
 | 스타일 | 포트·어댑터 | `core`는 DB·네트워크·큐를 모르고 `infra`가 붙인다(3.4) | D7(CLI로 DB 없이 검증) |
 | 패턴 | 큐 기반 부하 평준화, 경쟁 소비자 | Redis Stream에 쌓고 워커 여러 개가 나눠 가짐 | D3 |
@@ -78,7 +78,8 @@ flowchart TB
     R[(Redis Stream<br/>ack·재배달, AOF)]
     OS[(파일 저장소<br/>로컬 디스크 기본 · S3 호환)]
     PG[(PostgreSQL<br/>정답·좌표·상태·오답)]
-    GM[Gemini API<br/>유료 티어]
+    GM[Gemini API<br/>무료 티어]
+    SC[스케줄러<br/>정리 작업 쪽지만 등록]
 
     subgraph W[Taskiq 워커 · 처리 파이프라인]
         P1[PDF 분석 / OCR] --> P2[좌표 추출·후보 필터]
@@ -98,6 +99,7 @@ flowchart TB
     U -->|원본 PDF| OS
     U -->|상태 queued| PG
     U -->|세트 ID만| R
+    SC -->|주기적으로 정리 작업| R
     R <-->|배달 · ack| W
     P2A <--> GM
     P3 <--> GM
@@ -111,7 +113,7 @@ flowchart TB
     I -->|가린 이미지만| OS
 ```
 
-핵심 구조는 **코드베이스 하나, 프로세스 둘(API + 워커)인 모듈러 모놀리스**다. API는 요청을 빠르게 받고 돌려주는 일만 하고, 수 초~수 분 걸리는 PDF 처리는 전부 워커가 한다.
+핵심 구조는 **코드베이스 하나, 프로세스 둘(API + 워커)인 모듈러 모놀리스**다. API는 요청을 빠르게 받고 돌려주는 일만 하고, 수 초~수 분 걸리는 PDF 처리는 전부 워커가 한다. 정리 작업 같은 주기 작업은 스케줄러가 정해진 시각에 쪽지만 넣고, 실행은 워커가 한다([ADR-011](decisions/ADR-011-periodic-jobs-scheduler.md)).
 
 ---
 
@@ -126,6 +128,7 @@ flowchart TB
 | LLM | **Gemini API 무료 티어**, 모델은 설정으로 교체 | 비용 0, 한·영과 구조화 출력 지원. 무료 티어 입력은 제품 개선에 쓰임 → [ADR-010](decisions/ADR-010-llm-gemini.md) |
 | 작업 상태의 기준 | **PostgreSQL** | Redis가 재시작돼도 진행 상태·부분 성공 정보가 남아야 함. Redis는 전달만 담당. SQLite 대신 고른 이유 → [ADR-008](decisions/ADR-008-database-postgresql.md) |
 | 결과 백엔드 | `RedisAsyncResultBackend`는 디버깅용 보조로만, 만료 시간 설정 | 상태 조회 API는 여기를 읽지 않음 |
+| 주기 작업 | 스케줄러(`taskiq scheduler`) 한 개가 쪽지만 등록하고 워커가 실행 | 워커 수를 늘려도 정리 작업이 중복 실행되지 않음 → [ADR-011](decisions/ADR-011-periodic-jobs-scheduler.md) |
 | 원본 PDF 경로 | 업로드 API가 검사 후 파일 저장소에 저장, 큐에는 세트 ID만 | 큐 메시지에 파일을 싣지 않음 |
 | 식별자 | 작업 ID = 빈칸 세트 ID, 모든 ID는 무작위 UUID, 남의 리소스는 404 | 멱등성·상태 조회 키가 하나, 존재 여부를 숨김 → [ADR-006](decisions/ADR-006-ids-and-not-found.md) |
 | 코드 구조 | `cloze/core`는 계산만 하고 바깥(DB·네트워크·큐)을 모른다(3.4) | CLI로 DB 없이 파이프라인 검증, 담당별 병렬 작업 |
@@ -145,6 +148,7 @@ flowchart TB
 | Gemini 요금제 | 개발 중 무료 티어, 다른 사람 자료를 받기 전에 유료 전환 | 무료 티어 입력은 Google 제품 개선에 쓰이고 사람이 검토할 수 있음 [확인] |
 | 배포 | 시연 기기 + Docker Compose. Tailscale로 노출(개발 중 Serve, 발표 때 Funnel). FastAPI가 웹 페이지·API를 한 주소로, Caddy 없음 | 발표 시연까지면 충분하고 비용이 없음. 같은 출처라 쿠키·CORS가 단순 → [ADR-007](decisions/ADR-007-deploy-demo-machine-tailscale.md) |
 | 인증 | 아이디·비밀번호. 계정은 팀이 CLI로 발급(가입 기능 없음), 서명된 세션 쿠키 | 사용자별 문서·한도·시도 기록이 성립. Google 로그인은 후속 → [ADR-007](decisions/ADR-007-deploy-demo-machine-tailscale.md) |
+| 프론트 구조 | **Svelte 5 + Vite**, 빌드 결과(정적 파일)를 FastAPI가 같은 주소로 내보냄 | 상태가 많은 화면(폴링·결과·다시 풀기·업로드)을 만들기 쉽고, 텍스트 출력이 기본으로 이스케이프됨. 한글 조합 처리는 직접 구현 → [ADR-012](decisions/ADR-012-frontend-framework-svelte.md) |
 | 개발 환경 | 파이썬 버전과 라이브러리 버전을 팀 전체가 통일 | 10/27 팀 미팅 결정. 구체 버전은 레포 생성 시 고정 |
 
 ### 2.1 권장안 (팀 확정 필요)
@@ -322,6 +326,7 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 | `api` | FastAPI. 웹 페이지·API·이미지를 한 주소로 | 무상태. 같은 출처라 CORS 설정이 필요 없음 |
 | `migrate` | 한 번 실행하고 끝남: `alembic upgrade head` | `api`·`worker`는 이게 성공한 뒤에 시작. 마이그레이션은 추가만(새 테이블·nullable 컬럼·인덱스) |
 | `worker` | Taskiq 워커 | 메모리 제한, 파서 격리. 발표 때는 메모리가 허락하는 만큼 늘림 |
+| `scheduler` | Taskiq 스케줄러. 정리 작업 쪽지를 주기적으로 등록 | **항상 한 개만** 띄운다. 늘리면 정리 작업이 그 수만큼 등록된다 → [ADR-011](decisions/ADR-011-periodic-jobs-scheduler.md) |
 | `redis` | Stream 브로커 | AOF 켬 |
 | `postgres` | DB | 시연 기기 데이터는 발표 후 지움. 백업·복구 절차는 클라우드로 옮길 때(9.1) |
 | 파일 | Compose 볼륨(로컬 디스크) | S3 호환은 어댑터로 교체(되면 좋음) |
@@ -366,8 +371,7 @@ pypdfium2로 렌더링하고 pdfplumber로 좌표·폰트를 얻는다([ADR-002]
 | 관측성(로그·오류 추적·지표 수집 위치) | 서버 코드가 없음 | 로드맵 5단계(워커·저장소 착수) | 운영 지표 목록, `llm_calls` 기록, 폴백·영구 오류 경보 |
 | 클라우드 배포(VPS 이전) | 시연까지는 시연 기기로 충분 | 평가 기준이 클라우드 배포를 요구할 때 | 같은 Compose, 공개 주소는 Funnel 또는 Caddy(ADR-007) |
 | DB 백업·복구 절차 | 시연 기기 데이터는 발표 후 지움 | 클라우드로 옮길 때 | Alembic 마이그레이션은 결정됨(7장 `migrate`, DB가 처음 생기는 PR부터 적용) |
-| 프론트 구조(프레임워크, 화면 목록) | 프론트 스파이크 결과가 필요 | 로드맵 3단계(오버레이) 착수 시 | API 계약, 입력칸 규칙([채점·입력칸 표시](design/grading-and-overlay.md)) |
-| CI(자동 검사) | 검사할 코드가 아직 없음 | **레포 골격과 같은 시기(1주차)**. 처음부터 모든 PR이 정적 분석을 통과하게 | 없음 |
+| CI(자동 검사) | 검사할 코드가 아직 없음 | **레포 골격과 같은 시기(1주차)**. 처음부터 모든 PR이 정적 분석을 통과하게 | 다섯 가지 검사([README 개발 환경](../README.md#개발-환경)). DB를 쓰는 테스트는 CI의 PostgreSQL 서비스 컨테이너에서 돌린다. 표시를 달아 건너뛰면 워커의 멱등 저장 테스트가 CI에서 한 번도 돌지 않기 때문이다. `ci.yml`에는 DB 세팅([#81](https://github.com/best-vibing/cloze/pull/81))에서 반영했다 |
 
 ## 10. 다음 행동
 
