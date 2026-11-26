@@ -71,6 +71,9 @@ async def save_document(
 
     파일을 먼저 쓰고 행을 넣는다. 반대 순서면 "행은 있는데 파일이 없는" 문서가 생길 수 있다.
     호출하는 쪽이 커밋하지 않고 롤백하면 파일만 남는데, 그것은 정리 작업(#30)이 지운다.
+
+    호출한 쪽은 바로 커밋한다. 같은 PDF를 늦게 올린 요청은 고유 인덱스에서 이 트랜잭션이
+    끝나기를 기다리므로, 커밋 전에 긴 작업을 하면 그만큼 그 요청이 연결을 잡고 멈춘다.
     """
     sha256 = hashlib.sha256(pdf).hexdigest()
     existing = await find_active_document(session, owner_id, sha256)

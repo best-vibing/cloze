@@ -131,22 +131,9 @@ def test_save_does_not_commit() -> None:
     _run(test)
 
 
-async def _wait_until_lock_wait(sessions: Sessions, pid: int) -> None:
-    async with sessions() as watcher:
-        for _ in range(100):
-            waiting = await watcher.scalar(
-                text("SELECT wait_event_type = 'Lock' FROM pg_stat_activity WHERE pid = :pid"),
-                {"pid": pid},
-            )
-            if waiting:
-                return
-            # pg_stat_activity는 트랜잭션 안에서 처음 읽은 값을 계속 보여 준다.
-            await watcher.rollback()
-            await asyncio.sleep(0.05)
-    raise AssertionError("둘째 저장이 첫째 저장의 커밋을 기다리지 않았다")
-
-
-def test_concurrent_saves_of_same_page_leave_one_copy() -> None:
+def test_concurrent_saves_of_same_page_leave_one_copy(
+    wait_until_lock_wait: Callable[[Sessions, int], Awaitable[None]],
+) -> None:
     # 재등록과 죽은 작업 회수가 겹치면 같은 세트를 두 워커가 동시에 저장한다(ADR-013).
     set_id = uuid.uuid4()
     first = [_blank(1, "A1"), _blank(2, "A2")]
@@ -159,7 +146,7 @@ def test_concurrent_saves_of_same_page_leave_one_copy() -> None:
                 pid = await worker_2.scalar(text("SELECT pg_backend_pid()"))
                 saving = asyncio.create_task(save_page_blanks(worker_2, set_id, 1, second))
                 try:
-                    await _wait_until_lock_wait(sessions, pid)
+                    await wait_until_lock_wait(sessions, pid)
                     await worker_1.commit()
                     with pytest.raises(IntegrityError):
                         await saving

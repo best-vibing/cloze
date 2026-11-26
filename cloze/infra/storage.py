@@ -30,17 +30,22 @@ class LocalStorage:
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-        temp.write_bytes(data)
-        os.replace(temp, path)
+        try:
+            temp.write_bytes(data)
+            os.replace(temp, path)
+        except BaseException:
+            # 디스크가 꽉 찼거나 대상이 열려 있으면(Windows) 여기로 온다. 임시 파일을 가리키는
+            # 행이 없어 정리 작업도 놓치기 쉬우니 바로 지운다.
+            temp.unlink(missing_ok=True)
+            raise
 
     def read(self, key: str) -> bytes:
         return self._path(key).read_bytes()
 
     def delete(self, key: str) -> None:
-        """없어도 오류가 아니다. 비게 된 문서 폴더도 지운다."""
-        path = self._path(key)
-        path.unlink(missing_ok=True)
-        try:
-            path.parent.rmdir()
-        except OSError:
-            pass  # 다른 파일이 남아 있거나 이미 없음
+        """파일만 지운다. 없어도 오류가 아니다.
+
+        빈 문서 폴더는 남긴다. 여기서 폴더를 지우면 같은 폴더에 쓰는 쪽의 mkdir과 write 사이에
+        끼어들 수 있다. 빈 폴더 정리는 정리 작업(#30)이 맡는다.
+        """
+        self._path(key).unlink(missing_ok=True)
