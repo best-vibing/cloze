@@ -10,6 +10,8 @@ from typing import Literal
 
 from cloze.core.models import Token
 
+# [가설] 구 하나에 담을 최대 토큰 수. 이보다 긴 구간은 용어보다 문장·제목으로 보고
+# 칸 하나로 묶지 않는다.
 MAX_PHRASE_TOKENS = 3
 
 type PhraseProblem = Literal["length", "not_consecutive", "crosses_line"]

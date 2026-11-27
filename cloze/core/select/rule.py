@@ -25,7 +25,6 @@ SIZE_RATIO_CAP = 2.0
 HEADING_LINE_RATIO = 0.1
 BOLD_MARKERS = ("BOLD", "BLACK", "HEAVY")
 MAX_PER_LINE = 2
-# [가설] 구 하나에 담을 최대 토큰 수. 이보다 긴 강조 구간은 용어보다 문장·제목으로 보고 묶지 않는다.
 # [가설] 굵지 않아도 페이지 중앙값의 이 배수 이상인 글자 크기면 강조로 보고 구로 묶을 수 있다.
 PHRASE_SIZE_RATIO = 1.2
 # [가설] 이웃 토큰의 글자 크기 차이가 이 값(pt) 이하이면 같은 스타일로 본다.
