@@ -12,8 +12,9 @@ from cloze.core.models import (
     Slot,
     Token,
 )
+from cloze.core.phrase import MAX_PHRASE_TOKENS
 from cloze.core.redact import blank_bbox as legacy_blank_bbox
-from cloze.core.select.rule import MAX_PHRASE_TOKENS, build_doc_stats, select_rule
+from cloze.core.select.rule import build_doc_stats, select_rule
 
 
 def page_with(*words: str) -> PageTokens:
