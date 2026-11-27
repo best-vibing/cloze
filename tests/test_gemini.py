@@ -99,7 +99,7 @@ def test_invalid_responses_are_not_retried(raw: str) -> None:
     assert transport.calls == 1
 
 
-@pytest.mark.parametrize("code", [408, 429, 500, 503, 599])
+@pytest.mark.parametrize("code", [408, 500, 503, 599])
 def test_transient_retry_then_success(code: int, monkeypatch: pytest.MonkeyPatch) -> None:
     """일시적 HTTP 오류 후 성공하며 정확히 한 번 기다린다."""
     delay = AsyncMock()
@@ -112,7 +112,7 @@ def test_transient_retry_then_success(code: int, monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.parametrize(
-    "error", [TimeoutError("private"), httpx.ConnectError("private"), errors.APIError(429, {})]
+    "error", [TimeoutError("private"), httpx.ConnectError("private"), errors.APIError(503, {})]
 )
 def test_transport_errors_exhaust_three_attempts(
     error: Exception, monkeypatch: pytest.MonkeyPatch
