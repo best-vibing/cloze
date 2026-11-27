@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # 웹 페이지 빌드 결과 폴더. frontend/ 는 빌드 전 소스라 내보내지 않는다.
     # 없으면 API만 띄운다.
     static_dir: Path = Path("frontend/dist")
+    # 업로드 한도와 검사 하위 프로세스 제한(신뢰성 설계 2·5절, [가설]).
+    upload_max_bytes: int = 20 * 1024 * 1024
+    upload_max_pages: int = 30
+    upload_probe_timeout_s: float = 5.0
+    upload_probe_memory_mb: int = 256
     # 업로드 원본·이미지를 두는 폴더(로컬 디스크 저장소). 레포에는 커밋하지 않는다.
     # API·워커·정리 작업이 같은 폴더를 봐야 하므로 실행 위치와 무관한 절대 경로만 받는다.
     storage_dir: Path = REPO_ROOT / "data" / "storage"
