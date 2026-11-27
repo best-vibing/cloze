@@ -170,7 +170,11 @@ def test_large_regular_words_also_form_a_phrase() -> None:
         [_word(0, "oxidative"), _word(1, "phosphorylation", bold=False)],  # 스타일이 다름
         [_word(0, "ATP,"), _word(1, "NADH")],  # 쉼표에서 끊김
         [_word(0, "ATP"), _word(1, "(NADH)")],  # 여는 괄호에서 끊김
-        [_word(0, "데이터를"), _word(1, "학습")],  # 조사 붙은 어절은 구의 끝에만 온다
+        [_word(0, "데이터를"), _word(1, "학습")],  # 가운데 어절에 조사
+        [_word(0, "확률"), _word(1, "분포를")],  # 끝 어절에 조사(#130)
+        [_word(0, "딥러닝"), _word(1, "모델이며")],  # 끝 어절에 조사(#130)
+        [_word(0, "모델"), _word(1, "학습한다")],  # 끝 어절에 어미(#130)
+        [_word(0, "사용하여"), _word(1, "학습")],  # 가운데 어절에 어미(#130)
     ],
 )
 def test_tokens_that_must_not_join_stay_separate(pair: list[Token]) -> None:
@@ -185,8 +189,8 @@ def test_non_candidate_between_breaks_the_phrase() -> None:
     assert [0] in spans and [2] in spans
 
 
-def test_korean_phrase_may_end_with_particle() -> None:
-    tokens = _with_filler([_word(0, "확률"), _word(1, "분포를")])
+def test_korean_phrase_without_particle_joins() -> None:
+    tokens = _with_filler([_word(0, "확률"), _word(1, "분포")])
     assert [0, 1] in _spans(tokens)
 
 

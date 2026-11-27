@@ -1,9 +1,15 @@
-"""cloze.core.phrase: 구 빈칸 모양 규칙(#47)."""
+"""cloze.core.phrase: 구 빈칸 모양 규칙(#47)과 구를 끊는 조건(#130)."""
 
 import pytest
 
 from cloze.core.models import Token
-from cloze.core.phrase import MAX_PHRASE_TOKENS, PhraseProblem, is_phrase, phrase_problem
+from cloze.core.phrase import (
+    MAX_PHRASE_TOKENS,
+    PhraseProblem,
+    broken,
+    is_phrase,
+    phrase_problem,
+)
 
 
 def _tokens(*spec: tuple[int, int]) -> list[Token]:
@@ -33,3 +39,37 @@ def test_phrase_problem(spec: list[tuple[int, int]], expected: PhraseProblem | N
     tokens = _tokens(*spec)
     assert phrase_problem(tokens) == expected
     assert is_phrase(tokens) is (expected is None)
+
+
+def _words(*texts: str) -> list[Token]:
+    """한 줄에 이어진 토큰을 만든다."""
+    return [
+        Token(id=i, text=text, bbox=(0, 0, 0.1, 0.1), line_id=0, font_size=12, fontname="A")
+        for i, text in enumerate(texts)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("texts", "expected"),
+    [
+        (("딥러닝", "모델이며"), "phrase_break"),  # 끝 어절에 조사. #129 Lec2 p02에서 실제로 통과함
+        (("모델", "학습한다"), "phrase_break"),  # 끝 어절에 어미
+        (("Transformer", "모델입니다"), "phrase_break"),  # 끝 어절에 존댓말 끝
+        (("데이터를", "학습"), "phrase_break"),  # 가운데 어절에 조사
+        (("사용하여", "개인", "포트폴리오"), "phrase_break"),  # 가운데 어절에 어미
+        (("확률과", "통계"), "phrase_break"),  # 반례: 조사를 품은 용어도 막는다(#130에서 정함)
+        (("electron,", "transport"), "phrase_break"),  # 쉼표
+        (("proton", "(gradient)"), "phrase_break"),  # 여는 부호
+        (("확률", "분포"), None),
+        (("Large", "Language", "Model"), None),
+        (("Bernoulli", "trials."), None),  # 끝 토큰 뒤의 마침표는 끊지 않는다
+        (("화면", "구성"), None),  # 짧은 어미(-면)는 목록에 없다
+        (("광고", "효과"), None),  # 짧은 어미(-고)는 목록에 없다
+        (("모델이며",), None),  # 한 단어 칸에는 적용하지 않는다
+        (("학습한다",), None),
+    ],
+)
+def test_phrase_break(texts: tuple[str, ...], expected: PhraseProblem | None) -> None:
+    tokens = _words(*texts)
+    assert phrase_problem(tokens) == expected
+    assert broken(tokens) is (expected == "phrase_break")

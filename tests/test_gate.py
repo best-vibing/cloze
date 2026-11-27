@@ -254,6 +254,24 @@ def test_phrase_span_must_be_contiguous_on_one_line(span: list[int]) -> None:
     assert not result.blanks
 
 
+@pytest.mark.parametrize(
+    "words",
+    [
+        ("딥러닝", "모델이며"),  # 끝 어절에 조사(#130)
+        ("모델", "학습한다"),  # 끝 어절에 어미
+        ("데이터를", "학습"),  # 가운데 어절에 조사
+        ("확률과", "통계"),  # 조사를 품은 용어도 막는다
+        ("electron,", "transport"),  # 쉼표. 정답은 부호를 떼도 상자가 쉼표를 덮는다
+        ("proton", "(gradient)"),  # 여는 부호
+    ],
+)
+def test_phrase_that_is_a_sentence_fragment_is_rejected(words: tuple[str, str]) -> None:
+    page = line(words)
+    result = apply_gate(page, candidates(page), spans([0, 1]), Policy(seed=1, density=100))
+    assert [item.reason for item in result.rejected] == ["phrase_break"]
+    assert not result.blanks
+
+
 def test_phrase_with_non_candidate_token_is_rejected() -> None:
     page = line(("gradient", "descent"))
     options = candidates(page).model_copy(update={"candidate_ids": [0]})

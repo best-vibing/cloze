@@ -10,9 +10,9 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from cloze.core.filter import EDGE_PUNCTUATION, excluded_count, normalize_ko, word_key
+from cloze.core.filter import excluded_count, word_key
 from cloze.core.models import PageCandidates, PageTokens, Policy, Selection, Slot, Token
-from cloze.core.phrase import MAX_PHRASE_TOKENS, adjacent
+from cloze.core.phrase import adjacent, is_phrase, splits
 
 # [가설] 신호별 가중치. 합은 1이다. 실데이터로 보정한다(selection-and-quality-gate.md 2.5절).
 WEIGHT_SIZE = 0.35
@@ -157,10 +157,11 @@ def _unit_score(unit: Unit, median: float, stats: DocStats) -> float:
 
 
 def _units(tokens: list[Token], median: float) -> list[Unit]:
-    """이어진 강조 구간을 구로 묶는다. MAX_PHRASE_TOKENS보다 긴 구간은 토큰 하나씩 둔다."""
+    """이어진 강조 구간을 구로 묶는다. 구가 될 수 없는 구간(MAX_PHRASE_TOKENS보다 길거나 끝 어절에
+    조사·어미가 붙음, phrase.is_phrase)은 토큰 하나씩 둔다."""
     units: list[Unit] = []
     for run in _runs(tokens, median):
-        if len(run) <= MAX_PHRASE_TOKENS:
+        if is_phrase(run):
             units.append(run)
         else:
             units.extend([token] for token in run)
@@ -181,9 +182,7 @@ def _runs(tokens: list[Token], median: float) -> list[Unit]:
 
 def _joins(left: Token, right: Token, median: float) -> bool:
     """같은 줄의 바로 다음 토큰이고, 둘 다 같은 강조 스타일이며, 사이에 구를 끊는 표시가 없는가."""
-    return (
-        adjacent(left, right) and _same_emphasis(left, right, median) and not _breaks(left, right)
-    )
+    return adjacent(left, right) and _same_emphasis(left, right, median) and not splits(left, right)
 
 
 def _same_emphasis(left: Token, right: Token, median: float) -> bool:
@@ -193,15 +192,6 @@ def _same_emphasis(left: Token, right: Token, median: float) -> bool:
     )
     emphasized = bold_signal(left) == 1.0 or left.font_size >= median * PHRASE_SIZE_RATIO
     return same_style and emphasized
-
-
-def _breaks(left: Token, right: Token) -> bool:
-    """왼쪽이 문장 부호나 조사로 끝나거나 오른쪽이 여는 부호로 시작하면 구를 끊는다.
-    쉼표를 넘어 묶으면 상자가 부호까지 덮고, 조사 붙은 어절은 구의 끝에만 온다
-    ("데이터를 학습한다"를 막는다)."""
-    word = left.text.strip(EDGE_PUNCTUATION)
-    marks = tuple(EDGE_PUNCTUATION)
-    return left.text.endswith(marks) or right.text.startswith(marks) or normalize_ko(word) != word
 
 
 def _pick(ranked: list[Unit], target: int) -> list[Unit]:
