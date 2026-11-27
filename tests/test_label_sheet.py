@@ -7,11 +7,51 @@ from pathlib import Path
 import pytest
 
 from cloze.cli.__main__ import main as cli_main
-from cloze.cli.label_sheet import COLUMNS, DENSITY, SEED, check_rows, main
+from cloze.cli.label_sheet import COLUMNS, DENSITY, SEED, _page_rows, check_rows, main
 from cloze.core.extract import EXTRACT_VERSION
+from cloze.core.models import PageInfo, PageTokens, Selection, Slot, Token
+from cloze.core.select.rule import DocStats
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PDFS = ("sample.pdf", "twoup.pdf")
+
+
+@pytest.mark.parametrize("hide_second_word", [False, True])
+def test_phrase_exposure_counts_only_full_visible_matches(hide_second_word: bool) -> None:
+    words = [
+        ("Gradient", 0),
+        ("Descent", 0),
+        ("Gradient", 1),
+        ("method", 1),
+        ("Gradient", 2),
+        ("Descent", 3),
+        ("Gradient", 4),
+        ("Descent", 4),
+    ]
+    tokens = [
+        Token(
+            id=index,
+            text=word,
+            line_id=line,
+            bbox=(0.1, 0.1, 0.2, 0.2),
+            font_size=12,
+            fontname="Regular",
+        )
+        for index, (word, line) in enumerate(words)
+    ]
+    page = PageTokens(page=PageInfo(page_no=1, width_pt=100, height_pt=100), tokens=tokens)
+    spans = [[0, 1], [3]]
+    if hide_second_word:
+        spans.append([7])
+    selection = Selection(spans=spans, slots=[Slot() for _ in spans], source="rule")
+
+    rows = _page_rows("sample.pdf", page, selection, len(spans), DocStats(Counter(), frozenset()))
+
+    assert rows[0]["answer"] == "Gradient Descent"
+    assert rows[0]["answer_len"] == 15
+    assert rows[0]["exposure_count"] == (0 if hide_second_word else 1)
+    assert str(rows[0]["context_after"]).startswith("Gradient [method]")
+    assert rows[1]["exposure_count"] == 0
 
 
 @pytest.fixture
