@@ -171,6 +171,7 @@ function getBlankSet(_init, setId) {
   const total = PAGES.length;
   const body = {
     blank_set_id: setId,
+    document_id: set.document_id, // 다시 만들기에 쓴다(#118)
     status,
     progress: { done: { queued: 0, running: 1 }[status] ?? total, total },
     preset_requested: set.preset_requested,

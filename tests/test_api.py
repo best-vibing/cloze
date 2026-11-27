@@ -19,7 +19,12 @@ class Body(BaseModel):
 
 def make_app(static_dir: Path) -> FastAPI:
     app = create_app(
-        Settings(public_origin=ORIGIN, static_dir=static_dir, session_secret=SecretStr("t" * 32))
+        Settings(
+            public_origin=ORIGIN,
+            static_dir=static_dir,
+            session_secret=SecretStr("t" * 32),
+            image_signing_key=SecretStr("i" * 32),
+        )
     )
 
     @app.get("/boom")

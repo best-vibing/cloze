@@ -39,7 +39,7 @@
 | 작업 제한 시간 (Taskiq `timeout` 라벨) | 8분 | 30쪽 처리 시간을 측정한 뒤 조정 |
 | `idle_timeout` (RedisStreamBroker) | 15분 | 기본값은 `600000`(밀리초, 10분). 이 시간 동안 ack가 없으면 `XAUTOCLAIM`으로 다른 워커가 넘겨받는다 [확인]. 단, **그 뒤 새 작업이 들어올 때** 넘겨받는다 [확인, [PR #91](https://github.com/best-vibing/cloze/pull/91)]. 같은 워커가 재시작하면 바로 다시 읽는다([ADR-013](../decisions/ADR-013-fast-redelivery-with-run-limit.md)) |
 | Gemini 호출당 타임아웃 | 60초 | [설정 기본값](../../cloze/config.py). 실측 후 조정 |
-| 이미지 서명 URL 만료 | 15분 [가설] | 만료되면 프론트가 세트를 다시 조회해 새 URL을 받는다 |
+| 이미지 서명 URL 만료 | 15분 [가설] | 만료되면 프론트가 세트를 다시 조회해 새 URL을 받는다. 설정 `CLOZE_IMAGE_URL_TTL_S`(기본 900) |
 
 **규칙: 작업 제한 시간 < `idle_timeout`.** `idle_timeout`이 지나면 워커가 살아서 아직 처리 중이어도 작업이 다른 워커에 다시 넘어가 두 번 실행된다(장시간 작업에서 실제로 보고된 사례) [확인]. 30쪽 처리가 8분을 넘는 것으로 측정되면 작업을 페이지 묶음 단위로 쪼갠다.
 

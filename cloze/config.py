@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # 로그인 실패 한도: 같은 아이디로 창 안에 이만큼 틀리면 막는다(신뢰성 설계 5절, [가설]).
     login_fail_limit: int = 5
     login_fail_window_s: float = 60.0
+    # 가린 이미지 주소(/images) 서명 키. 세션 키처럼 기본값 없이 API 앱에서만 필수다(create_app).
+    image_signing_key: SecretStr | None = None
+    # 이미지 주소 만료(초). 15분 [가설] (신뢰성 설계 2절).
+    image_url_ttl_s: int = Field(default=900, gt=0)
     # 업로드 원본·이미지를 두는 폴더(로컬 디스크 저장소). 레포에는 커밋하지 않는다.
     # API·워커·정리 작업이 같은 폴더를 봐야 하므로 실행 위치와 무관한 절대 경로만 받는다.
     storage_dir: Path = REPO_ROOT / "data" / "storage"

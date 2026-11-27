@@ -27,6 +27,7 @@ def _settings(tmp_path: Path) -> Settings:
         public_origin=ORIGIN,
         static_dir=tmp_path / "no-frontend",
         session_secret=SecretStr(SECRET),
+        image_signing_key=SecretStr("image-" + "y" * 32),
         cookie_secure=False,  # TestClient는 http라 Secure 쿠키를 돌려보내지 않는다
     )
 
@@ -94,7 +95,13 @@ def test_sign_round_trip_and_tamper() -> None:
 def test_app_needs_long_session_secret(tmp_path: Path) -> None:
     for secret in (None, SecretStr(""), SecretStr("dev-only-change-me")):
         with pytest.raises(RuntimeError):
-            create_app(Settings(static_dir=tmp_path, session_secret=secret))
+            create_app(
+                Settings(
+                    static_dir=tmp_path,
+                    session_secret=secret,
+                    image_signing_key=SecretStr("image-" + "y" * 32),
+                )
+            )
 
 
 def test_too_long_login_fields_are_rejected(client: TestClient) -> None:
