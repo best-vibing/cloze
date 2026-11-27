@@ -6,6 +6,15 @@ import { ApiError } from "./api.js";
 // 서버 값이 바뀌면 여기와 mock/server.js의 MAX_UPLOAD_BYTES도 고친다.
 export const LIMITS = { maxMb: 20, maxPages: 30 };
 
+/** 세트 상태(계약 2절 status 표) → 화면 이름. 풀이 화면과 문서 목록이 같이 쓴다. */
+export const STATUS_LABEL = {
+  queued: "순서를 기다리는 중",
+  running: "빈칸을 만드는 중",
+  done: "완료",
+  partial: "일부 쪽만 완료",
+  failed: "만들지 못했어요",
+};
+
 const BEFORE_SEND = {
   not_pdf: "PDF 파일만 올릴 수 있어요.",
   file_too_large: `${LIMITS.maxMb}MB 이하 PDF만 올릴 수 있어요.`,

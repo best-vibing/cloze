@@ -3,6 +3,7 @@
   // 빈칸 방식은 고르지 않는다. 서버가 자료를 보고 정하도록 preset은 auto로 보낸다(데이터 계약 1절).
   import { onMount } from "svelte";
   import { ApiError, LOGGED_IN, logout, uploadDocument } from "./api.js";
+  import DocumentList from "./DocumentList.svelte";
   import { LIMITS, beforeSendMessage, canResend, uploadErrorMessage } from "./messages.js";
 
   let dragging = $state(false);
@@ -137,6 +138,8 @@
       {/if}
     </div>
   </section>
+
+  <DocumentList />
 </main>
 
 <style>
