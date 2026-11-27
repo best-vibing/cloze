@@ -6,10 +6,13 @@
 
 from collections.abc import Sequence
 from itertools import pairwise
+from typing import Literal
 
 from cloze.core.models import Token
 
 MAX_PHRASE_TOKENS = 3
+
+type PhraseProblem = Literal["length", "not_consecutive", "crosses_line"]
 
 
 def adjacent(left: Token, right: Token) -> bool:
@@ -22,6 +25,20 @@ def contiguous(tokens: Sequence[Token]) -> bool:
     return all(adjacent(left, right) for left, right in pairwise(tokens))
 
 
+def phrase_problem(tokens: Sequence[Token]) -> PhraseProblem | None:
+    """칸 하나로 묶을 수 없는 이유. 묶을 수 있으면 None.
+
+    Gemini 선택기가 재시도 때 무엇을 고칠지 알리도록 이유를 나눈다. id가 이어지는지를 먼저 본다.
+    """
+    if not 1 <= len(tokens) <= MAX_PHRASE_TOKENS:
+        return "length"
+    if any(right.id != left.id + 1 for left, right in pairwise(tokens)):
+        return "not_consecutive"
+    if any(right.line_id != left.line_id for left, right in pairwise(tokens)):
+        return "crosses_line"
+    return None
+
+
 def is_phrase(tokens: Sequence[Token]) -> bool:
     """칸 하나로 묶을 수 있는 토큰인가: 1~MAX_PHRASE_TOKENS개이고 같은 줄에서 이어짐."""
-    return 1 <= len(tokens) <= MAX_PHRASE_TOKENS and contiguous(tokens)
+    return phrase_problem(tokens) is None

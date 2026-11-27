@@ -90,7 +90,7 @@ def test_prompt_and_selection(
         ({"blanks": [blank(1), blank(3)]}, "candidate ID"),
         ({"blanks": [blank(True), blank(2)]}, "schema"),
         ({"blanks": [blank(1.0), blank(2)]}, "candidate ID"),
-        ({"blanks": [{"token_ids": [1, 2], "type": "term"}, blank(3)]}, "phrase"),
+        ({"blanks": [{"token_ids": [1, 2], "type": "term"}, blank(3)]}, "line break"),
         ({"blanks": [{**blank(1), "bbox": [0, 0, 1, 1]}]}, "schema"),
         ({"blanks": [{**blank(1), "hint": 4}]}, "schema"),
         ({"blanks": []}, "density"),
@@ -249,9 +249,9 @@ def test_phrase_blanks_are_kept_in_page_order(
 @pytest.mark.parametrize(
     ("blanks", "reason"),
     [
-        ([span(3, 4), span(0)], "phrase"),  # 다른 줄(3은 줄 0, 4는 줄 1)
-        ([span(4, 6), span(0)], "phrase"),  # 이어지지 않은 id
-        ([span(5, 4), span(0)], "phrase"),  # 원문 순서가 아님
+        ([span(3, 4), span(0)], "line break"),  # 다른 줄(3은 줄 0, 4는 줄 1). 실제 PDF의 줄바꿈 구
+        ([span(4, 6), span(0)], "not consecutive"),  # 이어지지 않은 id
+        ([span(5, 4), span(0)], "not consecutive"),  # 원문 순서가 아님
         ([span(1, 2, 3), span(0)], "candidate ID"),  # 후보가 아닌 2가 끼어 있음
         ([span(4, 5), span(5, 6)], "duplicate"),  # 구끼리 토큰 공유
         ([span(0, 1), span(1)], "duplicate"),  # 구 안의 토큰을 단어 칸으로 또 고름

@@ -20,11 +20,18 @@ from cloze.core.models import (
     Slot,
     Token,
 )
-from cloze.core.phrase import MAX_PHRASE_TOKENS, is_phrase
+from cloze.core.phrase import MAX_PHRASE_TOKENS, PhraseProblem, phrase_problem
 from cloze.core.select.rule import target_count
 
 # v2: 구 빈칸(#47). 프롬프트·스키마를 바꾸면 올린다(blank_sets.prompt_version에 기록).
 PROMPT_VERSION = "gemini-select-v2"
+# 구 규칙 위반 메시지. 재시도 피드백으로 Gemini에 가므로 무엇을 고칠지 나눠 쓰되,
+# 응답 내용(id·글자)은 넣지 않는다.
+_PHRASE_ERRORS: dict[PhraseProblem, str] = {
+    "length": "Selection contains a phrase with too many tokens",
+    "not_consecutive": "Selection contains a phrase whose IDs are not consecutive in order",
+    "crosses_line": "Selection contains a phrase that crosses a line break",
+}
 _PRESETS = {
     "auto": "자료를 설명하는 핵심 개념과 용어를 우선한다.",
     "concept": "개념, 원리, 이론을 구별하는 핵심 용어를 우선한다.",
@@ -152,8 +159,8 @@ def _validated_slots(
         if any(type(token_id) is not int or token_id not in allowed for token_id in ids):
             raise LLMInvalidResponse("Selection contains an invalid candidate ID")
         unit = [allowed[token_id] for token_id in ids]
-        if not is_phrase(unit):
-            raise LLMInvalidResponse("Selection contains an invalid phrase")
+        if problem := phrase_problem(unit):
+            raise LLMInvalidResponse(_PHRASE_ERRORS[problem])
         if used.intersection(ids):
             raise LLMInvalidResponse("Selection contains a duplicate candidate ID")
         unit_boxes = [token.word_bbox or token.bbox for token in unit]
