@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
-from cloze.api import auth, errors
+from cloze.api import auth, documents, errors
 from cloze.config import Settings, load_settings
 from cloze.infra.db import make_engine, make_sessionmaker
 
@@ -53,6 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # 라우터는 여기에 추가한다(마운트보다 앞).
     app.include_router(auth.router)
+    app.include_router(documents.router)
 
     if settings.static_dir.is_dir():
         app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="frontend")

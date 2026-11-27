@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.14",
     "pydantic-settings>=2.16",
     "pypdfium2>=5.14",
+    "python-multipart>=0.0.34",
     "referencing>=0.37,<1",
     "sqlalchemy[asyncio]>=2.1.8",
     "taskiq>=0.13.0",
