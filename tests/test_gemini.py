@@ -44,7 +44,15 @@ class FakeTransport:
     entered: asyncio.Event = field(default_factory=asyncio.Event)
     images: list[Image.Image | None] = field(default_factory=list)
 
-    async def generate(self, prompt: str, schema: JSONObject, image: Image.Image | None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        schema: JSONObject,
+        image: Image.Image | None,
+        *,
+        seed: int | None = None,
+        temperature: float | None = None,
+    ) -> str:
         """호출 수를 기록하고 준비한 응답 또는 오류를 반환한다."""
         self.calls += 1
         self.active += 1

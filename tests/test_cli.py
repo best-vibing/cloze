@@ -92,7 +92,7 @@ def test_mask_json_lists_blanks_in_order(tmp_path: Path) -> None:
     assert page["page"]["page_no"] == 1
     blanks = page["blanks"]
     assert [blank["order"] for blank in blanks] == list(range(1, len(blanks) + 1))
-    assert "Gradient" in [blank["answer"] for blank in blanks]
+    assert "Gradient Descent" in [blank["answer"] for blank in blanks]  # 제목의 구 빈칸
     for blank in blanks:
         assert set(blank) == {"order", "answer", "bbox", "bg_color"}
         assert all(0.0 <= value <= 1.0 for value in blank["bbox"])

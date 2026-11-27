@@ -1,92 +1,39 @@
 <script>
-  // 앱 골격: 세트 하나를 2초마다 조회해 상태와 진행률을 보여 준다. 입력칸 겹치기는 풀이 화면 PR(#58)에서 붙인다.
-  // 서버와는 api.js로만 주고받는다. fetch를 여기서 부르지 않는다.
-  import { onMount } from "svelte";
-  import { ApiError, demoSetId, getBlankSet } from "./api.js";
+  // 화면 이동. 주소의 # 뒤만 본다: #/ 처음 화면, #/sets/{세트 ID} 세트 화면.
+  // # 뒤는 서버로 가지 않아서, 서버가 화면 주소마다 index.html을 돌려주는 설정 없이도 새로고침이 된다.
+  import Home from "./Home.svelte";
+  import SetStatus from "./SetStatus.svelte";
 
-  const POLL_MS = 2000;
-  const LABEL = {
-    queued: "순서를 기다리는 중",
-    running: "빈칸을 만드는 중",
-    done: "완료",
-    partial: "일부 쪽만 완료",
-    failed: "만들지 못했어요",
-  };
-
-  const setId = new URLSearchParams(location.search).get("set") ?? demoSetId;
-  let blankSet = $state(null);
-  let problem = $state("");
-
-  const finished = $derived(blankSet && !["queued", "running"].includes(blankSet.status));
-  const blankCount = $derived(blankSet?.pages.reduce((n, p) => n + p.blanks.length, 0) ?? 0);
-
-  onMount(() => {
-    let timer;
-    // 요청을 기다리는 동안 화면이 사라지면, 응답이 온 뒤 타이머를 다시 걸지 않는다.
-    let stopped = false;
-    async function poll() {
-      try {
-        blankSet = await getBlankSet(setId);
-        problem = "";
-        if (!["queued", "running"].includes(blankSet.status)) return;
-      } catch (e) {
-        // 서버 문장(message)은 텍스트로만 넣는다. Svelte {…}는 HTML로 해석하지 않는다.
-        problem = e instanceof ApiError ? e.message : "연결에 문제가 있어요. 잠시 후 다시 시도해 주세요.";
-        if (e instanceof ApiError && e.status < 500) return; // 401·404는 다시 물어봐도 같다
-      }
-      if (!stopped) timer = setTimeout(poll, POLL_MS);
-    }
-    if (setId) poll();
-    else problem = "열 빈칸 세트가 없어요. 주소에 ?set=세트ID 를 붙여 주세요.";
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  });
+  let hash = $state(location.hash);
+  const setId = $derived(hash.match(/^#\/sets\/([^/]+)$/)?.[1] ?? null);
 </script>
 
-<main>
-  <h1>Cloze</h1>
-  <!-- 실시간 영역은 글자가 바뀌기 전부터 DOM에 있어야 낭독된다. 비면 :empty로 숨긴다. -->
-  <p class="problem" role="alert">{problem}</p>
-  {#if blankSet}
-    <section aria-live="polite">
-      <p><strong>{LABEL[blankSet.status] ?? blankSet.status}</strong></p>
-      <progress max={blankSet.progress.total} value={blankSet.progress.done}></progress>
-      <span>처리 {blankSet.progress.done} / {blankSet.progress.total}쪽</span>
-      {#if blankSet.preset_reason}<p>{blankSet.preset_reason}</p>{/if}
-      {#if blankSet.error}<p class="problem">{blankSet.error.message}</p>{/if}
-      {#if finished && !blankSet.error}
-        <!-- progress는 처리를 시도한 쪽, pages는 풀 수 있는 쪽이라 partial이면 둘이 다르다(계약 2절). -->
-        {#if blankSet.status === "partial"}
-          <p>
-            {blankSet.progress.total}쪽 중 {blankSet.pages.length}쪽만 만들었어요. 빈칸 {blankCount}개를 받았어요.
-          </p>
-        {:else}
-          <p>{blankSet.pages.length}쪽, 빈칸 {blankCount}개를 받았어요.</p>
-        {/if}
-      {/if}
-    </section>
-  {:else if !problem}
-    <p>불러오는 중…</p>
-  {/if}
-</main>
+<svelte:window onhashchange={() => (hash = location.hash)} />
+
+{#if setId}
+  <!-- 세트가 바뀌면 화면을 새로 만들어 이전 세트의 폴링을 멈춘다. -->
+  {#key setId}<SetStatus {setId} />{/key}
+{:else}
+  <Home />
+{/if}
 
 <style>
-  main {
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 16px;
+  :global(:root) {
+    --bg: #eef0fb;
+    --surface: #ffffff;
+    --text: #1f2330;
+    --muted: #5f6475;
+    --line: #c9cde0;
+    --accent: #4f46e5;
+    --accent-weak: #e7e6fd;
+    --danger: #b91c1c;
+    --correct: #15803d;
+    --near: #b45309;
     font-family: system-ui, "Malgun Gothic", sans-serif;
+    color: var(--text);
   }
-  progress {
-    width: 240px;
-    vertical-align: middle;
-  }
-  .problem {
-    color: #b91c1c;
-  }
-  .problem:empty {
-    display: none;
+  :global(body) {
+    margin: 0;
+    background: var(--bg);
   }
 </style>

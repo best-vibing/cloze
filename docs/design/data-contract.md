@@ -34,23 +34,32 @@
 
 규칙 기반 선택기(`select/rule`)는 `ask_llm` 대신 문서 통계(`doc_stats`: 정규화한 단어의 빈도, 제목급 줄의 단어)를 받는다.
 
+`spans`의 칸 하나는 토큰 하나이거나, 같은 줄에서 id가 이어진 여러 토큰(구)이다. 지금 구를 만드는 것은 규칙 기반 선택기뿐이다. 게이트는 구를 받되 같은 줄에서 id가 이어지지 않거나 규칙 선택기의 최대 길이를 넘으면 `invalid_span`으로 버린다. Gemini 응답 스키마는 한 단어만 받고, 구는 후속이다([선택 3절](selection-and-quality-gate.md#3-프롬프트-입력-형식)).
+
 추출 토큰(`Token`)과 선택기 출력(`Selection`)의 필드·허용값은 [`core/models.py`](../../cloze/core/models.py)가 기준이다. 선택기 출력의 `source`는 `gemini / rule`이며, 페이지 결과의 `selection.source`와는 구분한다(1.4절). 빈칸이 없을 때의 `none`은 파이프라인이 붙이며 `Selection` 모델에는 포함하지 않는다.
 
 `Token`에는 `font_color`, `conf`, `block_id`를 두지 않는다([Issue #41 팀 합의](https://github.com/best-vibing/cloze/issues/41#issuecomment-6818882350)). 색은 토큰 필드가 아니라 `blanks[].style`을 채우는 별도 처리 단계에서 다루며, redact가 칠할 때 계산한다. 구체적인 style 조립 방식은 [PR #94](https://github.com/best-vibing/cloze/pull/94)의 후속 합의 사항이다.
 
-`pipeline`을 `prepare`와 `build` 둘로 나눈 이유: 추출 결과를 저장했다가 다시 만들기에서 재사용하고(L2), 재실행 때 끝난 페이지를 건너뛰려면(L4) 워커가 중간에 끼어들 수 있어야 하기 때문이다.
+[게이트](../../cloze/core/gate.py)는 같은 페이지의 후보·제외 사유도 받는다. 게이트가 반환한
+`GateBlank`의 스타일에는 글자 크기 비율만 있다. 최종 `Blank`에는 이미지 처리에서 얻은
+글자색과 redact가 반환한 배경색을 채워야 한다.
+
+[`pipeline`](../../cloze/core/pipeline.py)의 `prepare`는 다시 만들기에 재사용할 페이지를 반환하고(L2), `analyze_document`는 워커가 페이지 생성 전에 저장할 자동 분석 결과를 반환한다. `build`는 완료된 페이지를 건너뛰고(L4), 페이지별 이전 토큰 ID와 호출 기록기가 적용된 `ask_llm_for`를 사용한다. 워커는 결과를 받은 순서대로 저장할 수 있다.
 
 `filter`가 문서 전체를 받는 이유: 머리글·바닥글은 여러 페이지에서 같은 위치에 반복되는 글로 판정하므로 한 페이지만 봐서는 알 수 없다. 기준을 넘는 위치 묶음은 모두 뺀다(두 장 모아찍기 PDF는 바닥글이 한 쪽에 두 번 나온다). 그렇게 확인된 바닥글 문구로 문서의 다른 곳(표지 등)에서 **줄 전체가 바닥글 구절로만 이루어져 있으면** 그 줄의 토큰도 `footer_phrase`로 뺀다. 본문 문장 속에 같은 구절이 나오면("Vibe coding is a way …") 학습 내용이므로 후보로 남긴다. 구절은 바닥글 줄을 구분 기호나 큰 간격으로 나눈 것이고, 토큰 두 개 이상인 구절만 맞춘다. 한 단어로 맞추면 본문의 정상 단어까지 빠지기 때문이다. 비교는 `word_key`(대소문자·앞뒤 부호·조사 무시)로 한다. 값과 규칙은 [`core/filter`](../../cloze/core/filter.py)가 기준이다.
 
-문제·예시 슬라이드의 토큰은 `question_region`으로 뺀다([`core/question_region`](../../cloze/core/question_region.py)). 줄 첫 토큰이 표시 단어(`Example`, `Exercise`, `Q1`, `문제`, `예제` 등)이고 줄 전체이거나 `:`·`.`·`)`로 끝나거나 번호가 따라올 때만 맞춘다("for example, …"처럼 문장 안의 단어는 아니다). 판별은 쪽이 아니라 슬라이드 영역 단위다. 경계는 반복 머리글·바닥글 중 글자가 가장 작은 줄의 세로 위치이고, 한 쪽에 슬라이드가 한 장이면 쪽 전체가 영역이다. 표시 줄이 영역의 첫 줄(제목 자리, 반복 머리글·바닥글 줄은 건너뜀)일 때만 영역 전체를 뺀다. 본문 중간의 표시 줄("Example: learning rate …")이나 경계 단서가 없을 때는 표시 줄과 바로 이어지는 문단만 뺀다. 개념 슬라이드의 빈칸을 잃지 않기 위해 덜 빼는 쪽을 택했다. 제외 수는 품질 게이트와 규칙 선택기가 목표 개수의 분모에서 뺀다([선택·게이트 2.2](selection-and-quality-gate.md#22-페이지-단위)).
+문제·예시 슬라이드의 토큰은 `question_region`으로 뺀다([`core/question_region`](../../cloze/core/question_region.py)). 줄 첫 토큰이 표시 단어(`Example`, `Exercise`, `Q1`, `문제`, `예제` 등)이고 줄 전체이거나 `:`·`.`·`)`로 끝나거나 번호가 따라올 때만 맞춘다("for example, …"처럼 문장 안의 단어는 아니다). 판별은 쪽이 아니라 슬라이드 영역 단위다. 경계는 반복 머리글·바닥글 중 글자가 가장 작은 줄의 세로 위치이고, 한 쪽에 슬라이드가 한 장이면 쪽 전체가 영역이다. 표시 줄이 영역의 첫 줄(제목 자리, 반복 머리글·바닥글 줄은 건너뜀)일 때만 영역 전체를 뺀다. 본문 중간의 표시 줄("Example: learning rate …")이나 경계 단서가 없을 때는 표시 줄과 바로 이어지는 문단만 뺀다. 개념 슬라이드의 빈칸을 잃지 않기 위해 덜 빼는 쪽을 택했다. `question_region`과 `noncontent` 제외 수는 품질 게이트와 규칙 선택기가 목표 개수의 분모에서 뺀다([선택·게이트 2.2](selection-and-quality-gate.md#22-페이지-단위)).
 
-`cli`는 `--dump-stages`를 주면 단계마다 중간 결과를 JSON으로 남긴다. 담당자끼리 실제 파일을 주고받으며 계약을 맞춰 보기 위해서다.
+`python -m cloze.cli pipeline <pdf> --out <dir> --dump-stages`는 중간 결과 JSON과 결과 이미지를 저장한다. `--rule-only`를 추가하면 외부 호출 없이 규칙 기반으로 확인할 수 있다.
 
 ### 1.3 `ask_llm` 인터페이스와 오류 구분
 
 ```
 ask_llm(prompt: 문자열, schema: 응답 JSON 스키마, image: 선택) → 파싱된 dict
 ```
+
+Gemini 선택기는 선택적 키워드 `seed`와 `temperature`를 함께 넘긴다. 기존 분석 호출은
+이 값을 생략하며, 생성 기록·오류 분류·토큰 계산은 같은 클라이언트를 계속 사용한다.
 
 오류 종류는 `cloze/core/errors`에 정의하고, `infra/gemini`가 실제 오류를 이 종류로 바꿔 던진다(infra가 core를 import하는 방향이라 의존 규칙에 맞는다).
 
@@ -126,7 +135,7 @@ permanent로 전달한다. 종료는 자동 재시도하거나 생성 기록을 
 | `schema_version` | 계약 버전. 현재 값은 [`core/models.py`의 `SCHEMA_VERSION`](../../cloze/core/models.py)이 기준이다. 2: `tokens[].word_bbox` 추가([PR #74](https://github.com/best-vibing/cloze/pull/74)). 이번 문서 수정에서는 바꾸지 않는다 |
 | `page.source` | `textlayer` 또는 `ocr` |
 | `bbox` | `[x0, y0, x1, y1]`, 페이지 기준 0~1, 좌상단 원점 |
-| `blanks[].answer` | 토큰 원문에서 앞뒤 문장 부호를 뗀 글자. 한국어 조사는 떼지 않는다(v1은 어절 단위, [채점 1.1](grading-and-overlay.md#11-판정-순서)) |
+| `blanks[].answer` | 묶인 토큰마다 원문에서 앞뒤 문장 부호를 떼고 공백으로 이은 글자. 구 빈칸이면 `"oxidative phosphorylation"`처럼 여러 단어다. 한국어 조사는 떼지 않는다(어절 단위, [채점 1.1](grading-and-overlay.md#11-판정-순서)) |
 | `blanks[].bbox` | 묶인 토큰 `word_bbox`(없으면 `bbox`)의 합집합 + 패딩. 문장 부호는 칠하지 않는다. 부호를 뗀 변에는 패딩을 붙이지 않는다(패딩이 글자와 부호 사이 여백보다 커서 부호를 덮기 때문) |
 | `blanks[].type` | `text`, `number`, `term` |
 | `blanks[].style` | 입력칸 표시 정보(글자 크기 비율·글자색·배경색). [채점·입력칸 표시](grading-and-overlay.md) 3.1 |
@@ -273,9 +282,9 @@ users 1─N documents 1─N blank_sets 1─N blanks
 | 테이블 | 주요 필드 | 메모 |
 |---|---|---|
 | `users` | id, login_id(고유), password_hash, display_name, session_version, created_at | 계정은 팀이 CLI로 만든다. 비밀번호는 솔트를 붙인 느린 해시(scrypt 또는 Argon2)로만 저장한다. Google 로그인이 붙으면 외부 식별자 필드를 더한다 |
-| `documents` | id, owner_id, sha256, 파일명, page_count, 원본 키, created_at, expires_at, deleted_at | `(owner_id, sha256)` 고유는 **삭제 표시가 없는 행에만** 적용한다(부분 고유 인덱스 `WHERE deleted_at IS NULL`). 삭제한 뒤 같은 PDF를 올리면 새 문서가 된다. 처리 상태 필드 없음(업로드 검사는 요청 안에서 끝난다) |
+| `documents` | id, owner_id, sha256, filename, page_count, size_bytes, source_key, created_at, expires_at, deleted_at | `(owner_id, sha256)` 고유는 **삭제 표시가 없는 행에만** 적용한다(부분 고유 인덱스 `WHERE deleted_at IS NULL`). 삭제한 뒤 같은 PDF를 올리면 새 문서가 된다. 같은 PDF가 거의 동시에 두 번 오면 늦은 쪽이 자기 파일을 지우고 먼저 들어간 문서를 쓴다. 원본은 파일 저장소의 `documents/{id}/source.pdf`(`source_key`)에 두고, 사용자가 붙인 `filename`은 경로에 쓰지 않는다. `size_bytes`는 사용자별 저장 용량 한도용(#28). 처리 상태 필드 없음(업로드 검사는 요청 안에서 끝난다) |
 | `pages` | (document_id, page_no, extract_version), 크기(pt), source, 원본 이미지 키, 토큰 JSON 키 | 같은 추출 버전이면 세트끼리 재사용 |
-| `blank_sets` | id(= 작업 ID), document_id, requested_by, idempotency_key, request_hash, preset_requested, preset_applied, analysis, seed, model, prompt_version, extract_version, status, progress, run_count, error_code, error_message, created_at, updated_at, finished_at | 상태의 유일한 기준. `(requested_by, idempotency_key)` 고유. `prompt_version`·`extract_version`은 기록용. `run_count`는 실행 횟수, `updated_at`은 진행할 때마다 갱신 |
+| `blank_sets` | id(= 작업 ID), document_id, requested_by, idempotency_key, request_hash, preset_requested, preset_applied, analysis, seed, model, prompt_version, extract_version, status, progress_done, progress_total, run_count, error_code, error_message, created_at, updated_at, finished_at | 상태의 유일한 기준. `(requested_by, idempotency_key)` 고유. `prompt_version`·`extract_version`은 기록용. `progress_done`·`progress_total`이 API의 `progress {done, total}`이다. `status`는 위 표의 다섯 값만 받는다(CHECK 제약). `run_count`는 실행 횟수, `updated_at`은 진행할 때마다 실제 시각(`clock_timestamp()`)으로 갱신 |
 | `blank_set_pages` | (set_id, page_no), 가린 이미지 키, selection_source, quality | 가린 이미지는 세트마다 다르다. 이 행이 있으면 그 페이지는 처리가 끝난 것(재실행 시 건너뜀) |
 | `blanks` | id(= `blank_id`), set_id, page_no, 순서, token_ids, bbox, type, hint, style, **answer(서버 전용)**, variants, answer_group | `token_ids`는 다시 만들기에서 "이미 쓴 단어"를 알려 주는 데 쓴다 |
 | `attempts` | id, set_id, user_id, submitted_at, answers, results, score, after_reveal, revealed_at | `after_reveal`: 같은 세트에서 정답을 본 뒤의 시도인지. 처음 풀이와 복습을 나눠 꺼내기 위한 필드 |
