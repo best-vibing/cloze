@@ -13,6 +13,7 @@ from cloze.core.models import (
     Token,
 )
 from cloze.core.redact import blank_bbox as legacy_blank_bbox
+from cloze.core.select.rule import MAX_PHRASE_TOKENS, build_doc_stats, select_rule
 
 
 def page_with(*words: str) -> PageTokens:
@@ -88,7 +89,7 @@ def test_format_geometry_and_candidates() -> None:
     page.tokens[1].bbox = (0.01, 0.2, 0.05, 0.3)
     page.tokens[2].bbox = (0.3, 0.2, float("nan"), 0.3)
     chosen = selection(20, 20, 19, 18, 17, 99)
-    chosen.spans.extend([[], [16, 17], [16]])
+    chosen.spans.extend([[], [16, 18], [16]])
     chosen.slots.extend([Slot(), Slot()])
     options = candidates(page, [Excluded(id=17, reason="question_region")])
     result = apply_gate(page, options, chosen, Policy(seed=1, density=100))
@@ -198,3 +199,118 @@ def test_clean_generated_text(hint: str, kept: str | None) -> None:
     result = apply_gate(page, candidates(page), chosen, Policy(seed=1, density=100))
     assert result.blanks[0].hint == kept
     assert result.blanks[0].variants == ["ATP", "motors", "units", "bodies", "engines"]
+
+
+def line(*lines: tuple[str, ...]) -> PageTokens:
+    """줄마다 단어를 왼쪽부터 놓고, id는 읽는 순서대로 0부터 붙인다."""
+    tokens: list[Token] = []
+    for line_id, words in enumerate(lines):
+        top = 0.1 + line_id * 0.1
+        for x, word in enumerate(words):
+            tokens.append(
+                Token(
+                    id=len(tokens),
+                    text=word,
+                    line_id=line_id,
+                    bbox=(0.05 + x * 0.12, top, 0.15 + x * 0.12, top + 0.05),
+                    font_size=10,
+                    fontname="Arial",
+                )
+            )
+    return PageTokens(page=PageInfo(page_no=1, width_pt=200, height_pt=100), tokens=tokens)
+
+
+def spans(*items: list[int]) -> Selection:
+    return Selection(spans=list(items), slots=[Slot() for _ in items], source="rule")
+
+
+def test_phrase_span_becomes_one_blank() -> None:
+    page = line(("Gradient", "Descent,", "momentum"))
+    result = apply_gate(page, candidates(page), spans([0, 1]), Policy(seed=1, density=100))
+    assert not result.rejected
+    [blank] = result.blanks
+    assert blank.token_ids == [0, 1]
+    assert blank.answer == "Gradient Descent"
+    assert blank.bbox == blank_bbox(page, [0, 1])
+    assert result.quality["survival_ratio"] == pytest.approx(1 / 3)
+
+
+@pytest.mark.parametrize(
+    "span",
+    [
+        [0, 2],  # 이어지지 않음
+        [1, 0],  # 거꾸로
+        [2, 3],  # 다른 줄
+        list(range(MAX_PHRASE_TOKENS + 1)),  # 너무 김
+    ],
+)
+def test_phrase_span_must_be_contiguous_on_one_line(span: list[int]) -> None:
+    page = line(("alpha", "beta", "gamma"), ("delta", "omega"))
+    if len(span) > 3:
+        page = line(tuple(f"word{'x' * i}" for i in range(len(span))))
+    result = apply_gate(page, candidates(page), spans(span), Policy(seed=1, density=100))
+    assert [item.reason for item in result.rejected] == ["invalid_span"]
+    assert not result.blanks
+
+
+def test_phrase_with_non_candidate_token_is_rejected() -> None:
+    page = line(("gradient", "descent"))
+    options = candidates(page).model_copy(update={"candidate_ids": [0]})
+    result = apply_gate(page, options, spans([0, 1]), Policy(seed=1, density=100))
+    assert [item.reason for item in result.rejected] == ["not_candidate"]
+
+
+def test_phrase_exposed_only_by_the_same_phrase() -> None:
+    # 구 안의 단어가 따로 나와도 구 정답이 드러난 것은 아니다.
+    page = line(("gradient", "descent"), ("gradient", "boosting"))
+    result = apply_gate(page, candidates(page), spans([0, 1]), Policy(seed=1, density=100))
+    assert [blank.answer for blank in result.blanks] == ["gradient descent"]
+
+    # 같은 구가 후보가 아닌 곳에 또 있으면 노출로 버린다.
+    page = line(("gradient", "descent"), ("Gradient", "Descent"))
+    options = candidates(page).model_copy(update={"candidate_ids": [0, 1]})
+    result = apply_gate(page, options, spans([0, 1]), Policy(seed=1, density=100))
+    assert [item.reason for item in result.rejected] == ["answer_exposed"]
+    assert not result.blanks
+
+
+def test_repeated_phrase_is_masked_as_a_group() -> None:
+    page = line(("gradient", "descent"), ("Gradient", "Descent"))
+    result = apply_gate(page, candidates(page), spans([0, 1]), Policy(seed=1, density=100))
+    assert [blank.token_ids for blank in result.blanks] == [[0, 1], [2, 3]]
+    assert {blank.answer_group for blank in result.blanks} == {0}
+    assert result.quality["survival_ratio"] == pytest.approx(1 / 4)
+
+
+def test_rule_selector_phrase_survives_the_gate() -> None:
+    bold = [
+        Token(
+            id=i,
+            text=word,
+            line_id=0,
+            bbox=(0.1 + i * 0.2, 0.1, 0.28 + i * 0.2, 0.14),
+            font_size=24,
+            fontname="Helvetica-Bold",
+        )
+        for i, word in enumerate(("Gradient", "Descent"))
+    ]
+    filler = [
+        Token(
+            id=2 + i,
+            text=f"filler{'z' * i}",
+            line_id=1 + i,
+            bbox=(0.1, 0.2 + i * 0.03, 0.3, 0.22 + i * 0.03),
+            font_size=12,
+            fontname="Helvetica",
+        )
+        for i in range(18)
+    ]
+    info = PageInfo(page_no=1, width_pt=600, height_pt=800)
+    page = PageTokens(page=info, tokens=[*bold, *filler])
+    options = candidates(page)
+    policy = Policy(seed=1, density=10)
+    selection = select_rule(page, options, policy, set(), build_doc_stats([page], [options]))
+    assert [0, 1] in selection.spans
+    result = apply_gate(page, options, selection, policy)
+    assert "invalid_span" not in {item.reason for item in result.rejected}
+    assert "Gradient Descent" in {blank.answer for blank in result.blanks}

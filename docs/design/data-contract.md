@@ -34,6 +34,8 @@
 
 규칙 기반 선택기(`select/rule`)는 `ask_llm` 대신 문서 통계(`doc_stats`: 정규화한 단어의 빈도, 제목급 줄의 단어)를 받는다.
 
+`spans`의 칸 하나는 토큰 하나이거나, 같은 줄에서 id가 이어진 여러 토큰(구)이다. 지금 구를 만드는 것은 규칙 기반 선택기뿐이다. 게이트는 구를 받되 같은 줄에서 id가 이어지지 않거나 규칙 선택기의 최대 길이를 넘으면 `invalid_span`으로 버린다. Gemini 응답 스키마는 한 단어만 받고, 구는 후속이다([선택 3절](selection-and-quality-gate.md#3-프롬프트-입력-형식)).
+
 추출 토큰(`Token`)과 선택기 출력(`Selection`)의 필드·허용값은 [`core/models.py`](../../cloze/core/models.py)가 기준이다. 선택기 출력의 `source`는 `gemini / rule`이며, 페이지 결과의 `selection.source`와는 구분한다(1.4절). 빈칸이 없을 때의 `none`은 파이프라인이 붙이며 `Selection` 모델에는 포함하지 않는다.
 
 `Token`에는 `font_color`, `conf`, `block_id`를 두지 않는다([Issue #41 팀 합의](https://github.com/best-vibing/cloze/issues/41#issuecomment-6818882350)). 색은 토큰 필드가 아니라 `blanks[].style`을 채우는 별도 처리 단계에서 다루며, redact가 칠할 때 계산한다. 구체적인 style 조립 방식은 [PR #94](https://github.com/best-vibing/cloze/pull/94)의 후속 합의 사항이다.
@@ -129,7 +131,7 @@ permanent로 전달한다. 종료는 자동 재시도하거나 생성 기록을 
 | `schema_version` | 계약 버전. 현재 값은 [`core/models.py`의 `SCHEMA_VERSION`](../../cloze/core/models.py)이 기준이다. 2: `tokens[].word_bbox` 추가([PR #74](https://github.com/best-vibing/cloze/pull/74)). 이번 문서 수정에서는 바꾸지 않는다 |
 | `page.source` | `textlayer` 또는 `ocr` |
 | `bbox` | `[x0, y0, x1, y1]`, 페이지 기준 0~1, 좌상단 원점 |
-| `blanks[].answer` | 토큰 원문에서 앞뒤 문장 부호를 뗀 글자. 한국어 조사는 떼지 않는다(v1은 어절 단위, [채점 1.1](grading-and-overlay.md#11-판정-순서)) |
+| `blanks[].answer` | 묶인 토큰마다 원문에서 앞뒤 문장 부호를 떼고 공백으로 이은 글자. 구 빈칸이면 `"oxidative phosphorylation"`처럼 여러 단어다. 한국어 조사는 떼지 않는다(어절 단위, [채점 1.1](grading-and-overlay.md#11-판정-순서)) |
 | `blanks[].bbox` | 묶인 토큰 `word_bbox`(없으면 `bbox`)의 합집합 + 패딩. 문장 부호는 칠하지 않는다. 부호를 뗀 변에는 패딩을 붙이지 않는다(패딩이 글자와 부호 사이 여백보다 커서 부호를 덮기 때문) |
 | `blanks[].type` | `text`, `number`, `term` |
 | `blanks[].style` | 입력칸 표시 정보(글자 크기 비율·글자색·배경색). [채점·입력칸 표시](grading-and-overlay.md) 3.1 |
