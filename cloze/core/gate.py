@@ -4,7 +4,7 @@ import math
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from itertools import zip_longest
+from itertools import pairwise, zip_longest
 from typing import Literal, TypedDict
 
 from cloze.core.filter import normalize_ko, strip_punctuation, token_reason
@@ -22,12 +22,16 @@ from cloze.core.models import (
     Slot,
     Token,
 )
-from cloze.core.select.rule import target_count
+from cloze.core.select.rule import MAX_PHRASE_TOKENS, target_count
 
 # [가설] 글자 크기에 곱해 사방에 더할 여백을 구한다.
 PAD_RATIO = 0.15
 MIN_SURVIVAL = 0.6
 MAX_ANSWER_LOCATIONS = 3
+# 칸 하나: 토큰 하나 또는 같은 줄에서 id가 이어진 토큰 여러 개(구).
+# 구의 최대 길이는 규칙 선택기의 MAX_PHRASE_TOKENS와 같다.
+type Unit = list[Token]
+type UnitKey = tuple[str, ...]
 type RejectionReason = (
     ExcludeReason
     | Literal[
@@ -81,7 +85,7 @@ def apply_gate(
     if page.page.page_no != candidates.page_no or not math.isfinite(policy.density):
         raise ValueError("Expected matching pages and finite density")
     accepted, rejected = _validate_spans(page, candidates, selection, policy)
-    original_ids = {token.id for token, _ in accepted}
+    original_ids = {unit[0].id for unit, _ in accepted}
     expanded = _complete_answer_groups(page, candidates, policy, accepted)
     blanks = _build_blanks(page, expanded, rejected)
     target = target_count(page, candidates, policy)
@@ -95,10 +99,10 @@ def _validate_spans(
     candidates: PageCandidates,
     selection: Selection,
     policy: Policy,
-) -> tuple[list[tuple[Token, Slot]], list[RejectedBlank]]:
+) -> tuple[list[tuple[Unit, Slot]], list[RejectedBlank]]:
     tokens = {token.id: token for token in page.tokens}
     allowed = set(candidates.candidate_ids)
-    accepted: list[tuple[Token, Slot]] = []
+    accepted: list[tuple[Unit, Slot]] = []
     rejected: list[RejectedBlank] = []
     seen: dict[int, BBox] = {}
     for span, slot in zip_longest(selection.spans, selection.slots):
@@ -106,9 +110,9 @@ def _validate_spans(
         if span is not None and slot is not None:
             reason = _span_reason(span, tokens, allowed, seen, page.page, policy)
             if reason is None:
-                token = tokens[span[0]]
-                accepted.append((token, slot))
-                seen[token.id] = token.word_bbox or token.bbox
+                unit = [tokens[token_id] for token_id in span]
+                accepted.append((unit, slot))
+                seen.update((token.id, _box(token)) for token in unit)
         if reason is not None:
             rejected.append(RejectedBlank(list(span or []), reason))
     return accepted, rejected
@@ -122,24 +126,43 @@ def _span_reason(
     page: PageInfo,
     policy: Policy,
 ) -> RejectionReason | None:
-    if len(span) != 1 or type(span[0]) is not int:
+    """칸 하나(토큰 하나 또는 구)의 탈락 사유. 구는 같은 줄에서 id가 바로 이어진 토큰이어야 한다."""
+    if not 1 <= len(span) <= MAX_PHRASE_TOKENS or any(type(item) is not int for item in span):
         return "invalid_span"
-    token = tokens.get(span[0])
-    if token is None:
+    if any(token_id not in tokens for token_id in span):
         return "unknown_token"
-    if token.id in seen:
+    unit = [tokens[token_id] for token_id in span]
+    if not _contiguous(unit):
+        return "invalid_span"
+    if any(token.id in seen for token in unit):
         return "duplicate_token"
-    if reason := token_reason(token.text, policy.include_numbers):
-        return reason
-    if token.id not in allowed:
+    for token in unit:
+        if reason := token_reason(token.text, policy.include_numbers):
+            return reason
+    if any(token.id not in allowed for token in unit):
         return "not_candidate"
-    return _geometry_reason(page, token, seen)
+    return _unit_geometry_reason(page, unit, seen)
+
+
+def _contiguous(unit: Unit) -> bool:
+    return all(
+        right.id == left.id + 1 and right.line_id == left.line_id for left, right in pairwise(unit)
+    )
+
+
+def _unit_geometry_reason(
+    page: PageInfo, unit: Unit, seen: dict[int, BBox]
+) -> RejectionReason | None:
+    for token in unit:
+        if reason := _geometry_reason(page, token, seen):
+            return reason
+    return None
 
 
 def _geometry_reason(page: PageInfo, token: Token, seen: dict[int, BBox]) -> RejectionReason | None:
     if not _valid_geometry(page, token):
         return "invalid_geometry"
-    box = token.word_bbox or token.bbox
+    box = _box(token)
     if any(_overlaps(box, other) for other in seen.values()):
         return "overlap"
     return None
@@ -156,8 +179,12 @@ def _valid_geometry(page: PageInfo, token: Token) -> bool:
     ):
         return False
     left, top, right, bottom = token.bbox
-    x0, y0, x1, y1 = token.word_bbox or token.bbox
+    x0, y0, x1, y1 = _box(token)
     return 0 <= left <= x0 < x1 <= right <= 1 and 0 <= top <= y0 < y1 <= bottom <= 1
+
+
+def _box(token: Token) -> BBox:
+    return token.word_bbox or token.bbox
 
 
 def _overlaps(a: BBox, b: BBox) -> bool:
@@ -168,34 +195,49 @@ def _answer_key(text: str) -> str:
     return normalize_ko(normalize(text))
 
 
+def _unit_key(unit: Unit) -> UnitKey:
+    return tuple(_answer_key(token.text) for token in unit)
+
+
+def _occurrences(page: PageTokens, sizes: set[int]) -> dict[UnitKey, list[Unit]]:
+    """페이지에서 같은 줄의 이어진 토큰 n개(n은 sizes)를 모두 찾아 정답 키별로 모은다.
+    n이 1이면 토큰 하나하나다. 구 정답은 같은 구가 다른 곳에 있을 때만 노출로 본다."""
+    found: dict[UnitKey, list[Unit]] = defaultdict(list)
+    for size in sizes:
+        for start in range(len(page.tokens) - size + 1):
+            window = page.tokens[start : start + size]
+            if _contiguous(window):
+                found[_unit_key(window)].append(window)
+    return found
+
+
 def _complete_answer_groups(
     page: PageTokens,
     candidates: PageCandidates,
     policy: Policy,
-    accepted: list[tuple[Token, Slot]],
-) -> list[tuple[Token, Slot]]:
-    occurrences: dict[str, list[Token]] = defaultdict(list)
-    for token in page.tokens:
-        occurrences[_answer_key(token.text)].append(token)
+    accepted: list[tuple[Unit, Slot]],
+) -> list[tuple[Unit, Slot]]:
+    occurrences = _occurrences(page, {len(unit) for unit, _ in accepted})
     allowed = set(candidates.candidate_ids)
-    seen = {token.id: token.word_bbox or token.bbox for token, _ in accepted}
+    seen = {token.id: _box(token) for unit, _ in accepted for token in unit}
     expanded = accepted.copy()
-    for token, slot in accepted:
-        group = occurrences[_answer_key(token.text)]
+    for unit, slot in accepted:
+        group = occurrences[_unit_key(unit)]
         if not 1 < len(group) <= MAX_ANSWER_LOCATIONS:
             continue
-        missing = [item for item in group if item.id not in seen]
+        missing = [item for item in group if not all(token.id in seen for token in item)]
         positions = seen.copy()
         for item in missing:
-            if (
-                item.id not in allowed
-                or token_reason(item.text, policy.include_numbers) is not None
-                or _geometry_reason(page.page, item, positions) is not None
+            if any(token.id in positions for token in item) or any(
+                token.id not in allowed
+                or token_reason(token.text, policy.include_numbers) is not None
+                or _geometry_reason(page.page, token, positions) is not None
+                for token in item
             ):
                 break
-            positions[item.id] = item.word_bbox or item.bbox
+            positions.update((token.id, _box(token)) for token in item)
         else:
-            # Additional positions use the same type, with hints and variants validated per token.
+            # 추가한 위치는 같은 slot(type·hint·variants)을 쓰고, 힌트·변형은 칸마다 다시 거른다.
             expanded.extend((item, slot) for item in missing)
             seen = positions
     return expanded
@@ -203,33 +245,34 @@ def _complete_answer_groups(
 
 def _build_blanks(
     page: PageTokens,
-    accepted: list[tuple[Token, Slot]],
+    accepted: list[tuple[Unit, Slot]],
     rejected: list[RejectedBlank],
 ) -> list[GateBlank]:
-    occurrences = Counter(_answer_key(token.text) for token in page.tokens)
-    covered = Counter(_answer_key(token.text) for token, _ in accepted)
-    ordered = sorted(accepted, key=lambda item: (item[0].line_id, item[0].bbox[0]))
+    occurrences = _occurrences(page, {len(unit) for unit, _ in accepted})
+    covered = Counter(_unit_key(unit) for unit, _ in accepted)
+    ordered = sorted(accepted, key=lambda item: (item[0][0].line_id, item[0][0].bbox[0]))
     blanks: list[GateBlank] = []
-    groups: dict[str, int] = {}
-    for token, slot in ordered:
-        key = _answer_key(token.text)
-        if covered[key] != occurrences[key] or covered[key] > MAX_ANSWER_LOCATIONS:
-            rejected.append(RejectedBlank([token.id], "answer_exposed"))
+    groups: dict[UnitKey, int] = {}
+    for unit, slot in ordered:
+        key = _unit_key(unit)
+        if covered[key] != len(occurrences[key]) or covered[key] > MAX_ANSWER_LOCATIONS:
+            rejected.append(RejectedBlank([token.id for token in unit], "answer_exposed"))
             continue
         order = len(blanks)
         group = groups.setdefault(key, order) if covered[key] > 1 else None
-        blanks.append(_build_blank(page.page, token, slot, order, group))
+        blanks.append(_build_blank(page.page, unit, slot, order, group))
     return blanks
 
 
 def _build_blank(
     page: PageInfo,
-    token: Token,
+    unit: Unit,
     slot: Slot,
     order: int,
     group: int | None,
 ) -> GateBlank:
-    answer = strip_punctuation(token.text)
+    # 구 정답은 토큰마다 앞뒤 부호를 떼고 공백으로 잇는다(CLI _answers와 같은 규칙).
+    answer = " ".join(strip_punctuation(token.text) for token in unit)
     variants = _clean_variants(slot.variants, answer)
     hint = (slot.hint or "").strip()
     if not _plain_text(hint, 60) or any(
@@ -237,15 +280,15 @@ def _build_blank(
     ):
         hint = ""
     return GateBlank(
-        token_ids=[token.id],
-        bbox=_span_bbox(page, [token], PAD_RATIO),
+        token_ids=[token.id for token in unit],
+        bbox=_span_bbox(page, unit, PAD_RATIO),
         type=slot.type,
         hint=hint or None,
         variants=variants,
         answer=answer,
         order=order,
         answer_group=group,
-        style=GateStyle(font_size_ratio=token.font_size / page.width_pt),
+        style=GateStyle(font_size_ratio=max(token.font_size for token in unit) / page.width_pt),
     )
 
 
