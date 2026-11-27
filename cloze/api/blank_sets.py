@@ -195,9 +195,9 @@ async def get_image(
 ) -> Response:
     """서명·만료 → 소유자·삭제 표시 → 파일 순으로 확인한다. 어느 것이 틀려도 같은 not_found."""
     now = time.time()
-    if exp is None or sig is None or not exp.isdecimal():
+    expires = None if exp is None else signed_url.parse_exp(exp)
+    if expires is None or sig is None:
         raise _not_found()
-    expires = int(exp)
     if not signed_url.verify(key, expires, sig, _signing_key(request), now):
         logger.info("이미지 서명이 틀리거나 만료됨")
         raise _not_found()

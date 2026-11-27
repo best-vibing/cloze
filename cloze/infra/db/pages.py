@@ -109,6 +109,9 @@ async def list_page_views(session: AsyncSession, blank_set: BlankSetRow) -> list
     """끝난 쪽(blank_set_pages 행)과 그 쪽 크기·빈칸. 쪽·빈칸을 한 쿼리로 읽는다(폴링 비용).
 
     쪽 크기는 세트가 쓴 추출 버전의 pages 행에서 읽는다. 빈칸이 없는 쪽도 빈 목록으로 나온다.
+
+    전제: 워커(#52)는 세트를 done·partial로 바꾸기 전에 blank_sets.extract_version을 채운다.
+    비어 있으면 조인 조건이 `= NULL`이 되어 쪽이 하나도 나오지 않는다.
     """
     page = and_(
         PageRow.document_id == blank_set.document_id,

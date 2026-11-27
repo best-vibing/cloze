@@ -38,6 +38,8 @@ from cloze.infra.storage import LocalStorage, redacted_key, source_key
 ORIGIN = "http://testserver"
 SESSION_SECRET = "session-" + "s" * 32
 IMAGE_KEY = "image-" + "i" * 32
+# API는 설정의 만료 시간만 쓴다(기본 15분).
+TTL_S: int = Settings.model_fields["image_url_ttl_s"].default
 WEBP = b"RIFF\x00\x00\x00\x00WEBPVP8 fake"
 SECRET_FIELDS = {"answer", "variants", "answer_group", "token_ids"}
 BLANK_FIELDS = {"blank_id", "order", "bbox", "type", "hint", "style"}
@@ -272,7 +274,7 @@ def _keys(value: Any) -> set[str]:
 
 
 def _signed(key: str, now: float | None = None) -> str:
-    return signed_url.sign(key, IMAGE_KEY.encode(), time.time() if now is None else now)
+    return signed_url.sign(key, IMAGE_KEY.encode(), time.time() if now is None else now, TTL_S)
 
 
 # --- 서명 URL(DB 없음) ---
@@ -280,7 +282,7 @@ def _signed(key: str, now: float | None = None) -> str:
 
 def test_signed_url_round_trip_and_tamper() -> None:
     secret, now = b"k" * 32, 1_000_000.0
-    url = signed_url.sign("documents/a/blank_sets/b/1.webp", secret, now)
+    url = signed_url.sign("documents/a/blank_sets/b/1.webp", secret, now, TTL_S)
     parts = urlsplit(url)
     assert parts.path == "/images/documents/a/blank_sets/b/1.webp"
     query = {k: v[0] for k, v in parse_qs(parts.query).items()}
@@ -483,6 +485,10 @@ def test_bad_image_urls_are_rejected(client: TestClient, seed: Seed) -> None:
         client.get(f"/images/{key}"),  # 서명 없음
         client.get(f"/images/{key}?exp=soon&sig={sig}"),
         client.get(f"/images/{key}?exp={exp}&sig=%C3%A9"),
+        # 아주 긴 exp는 int()가 ValueError(4300자리 상한)를 내 500이 됐다(#127 리뷰).
+        client.get(f"/images/{key}?exp={'9' * 5000}&sig={sig}"),
+        # 아라비아-인도 숫자: isdecimal()은 통과하지만 ASCII 숫자가 아니다.
+        client.get(f"/images/{key}?exp=%D9%A1%D9%A2%D9%A3&sig={sig}"),
     ]
     assert {r.status_code for r in bad} == {404}
     assert {r.json()["error"]["code"] for r in bad} == {"not_found"}
@@ -523,3 +529,20 @@ def test_missing_image_file_is_not_found(client: TestClient, seed: Seed) -> None
     seed.storage.delete(made.redacted[1])
     res = _as(client, owner).get(_signed(made.redacted[1]))
     assert res.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1795742400", 1795742400),
+        ("9" * 12, 10**12 - 1),
+        ("9" * 13, None),
+        ("9" * 5000, None),
+        ("", None),
+        ("-1", None),
+        ("1.5", None),
+        ("١٢٣", None),
+    ],
+)
+def test_parse_exp(text: str, expected: int | None) -> None:
+    assert signed_url.parse_exp(text) == expected
