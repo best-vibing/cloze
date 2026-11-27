@@ -15,18 +15,11 @@
   import AttemptHistory from "./AttemptHistory.svelte";
   import BlankPage from "./BlankPage.svelte";
   import { blockedByIme, trackComposition } from "./ime.js";
-  import { actionErrorMessage, canResend } from "./messages.js";
+  import { STATUS_LABEL, actionErrorMessage, canResend } from "./messages.js";
 
   let { setId } = $props();
 
   const POLL_MS = 2000;
-  const LABEL = {
-    queued: "순서를 기다리는 중",
-    running: "빈칸을 만드는 중",
-    done: "완료",
-    partial: "일부 쪽만 완료",
-    failed: "만들지 못했어요",
-  };
   const NETWORK = "연결에 문제가 있어요. 잠시 후 다시 시도해 주세요.";
 
   let blankSet = $state(null);
@@ -283,7 +276,7 @@
   <p class="problem" role="alert">{problem}</p>
   {#if blankSet}
     <section aria-live="polite">
-      <p><strong>{LABEL[blankSet.status] ?? blankSet.status}</strong></p>
+      <p><strong>{STATUS_LABEL[blankSet.status] ?? blankSet.status}</strong></p>
       {#if !finished}
         <progress max={blankSet.progress.total} value={blankSet.progress.done}></progress>
         <span>처리 {blankSet.progress.done} / {blankSet.progress.total}쪽</span>

@@ -114,6 +114,8 @@ function login(init) {
 }
 
 function listDocuments() {
+  // 목록 조회도 세트 조회처럼 한 번 물은 것으로 센다. 그래야 처음 화면에서만 기다려도 상태가 queued → running → 끝으로 바뀐다.
+  for (const set of state.sets.values()) if (set.polls <= POLLS_UNTIL_FINISHED) set.polls += 1;
   // [가정] 계약 2절은 "문서마다 세트 요약"만 정한다. 문서 쪽 필드 이름은 #54 응답이 나오면 맞춘다.
   const documents = [...state.documents].map(([document_id, doc]) => ({
     document_id,
