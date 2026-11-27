@@ -3,6 +3,7 @@
 import asyncio
 import json
 import math
+import re
 import secrets
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, contextmanager
@@ -20,10 +21,19 @@ from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT202012
 
 from cloze.config import Settings
-from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransientError
+from cloze.core.errors import (
+    LLMInvalidResponse,
+    LLMPermanentError,
+    LLMQuotaExhausted,
+    LLMTransientError,
+)
 
 type JSONObject = dict[str, Any]
-type AttemptOutcome = Literal["ok", "invalid", "transient", "permanent"]
+type AttemptOutcome = Literal["ok", "invalid", "transient", "permanent", "quota"]
+
+# 408·5xx·전송 오류의 최초 포함 시도 횟수. 429는 Settings의 gemini_rate_limit_* 값을 따른다.
+_TRANSIENT_ATTEMPTS = 3
+_RETRY_DELAY = re.compile(r"(\d{1,6}(?:\.\d{1,9})?)s")
 
 
 @dataclass(frozen=True)
@@ -170,15 +180,75 @@ def _sdk_response(response: types.GenerateContentResponse) -> GeminiResponse:
     )
 
 
+class _RateLimited(LLMTransientError):
+    """분당 한도이거나 어느 한도인지 모르는 429. 재시도 판단에만 쓰고 밖으로 내보내지 않는다.
+
+    대기 시간과 한도 종류를 예외 속성으로 들고 다닌다. 재시도 루프는 이미 분류된 예외만
+    받으므로, 원본 APIError를 다시 읽지 않고 같은 자리에서 판단할 수 있다.
+    """
+
+    def __init__(self, retry_after_s: float | None, per_minute: bool) -> None:
+        super().__init__("Gemini request rate limit exceeded")
+        self.retry_after_s = retry_after_s
+        self.per_minute = per_minute
+
+
+def _error_details(error: errors.APIError) -> list[dict[str, Any]]:
+    """SDK가 보관한 응답 JSON에서 google.rpc 상세 목록만 꺼낸다. 모양이 다르면 빈 목록."""
+    body = error.details.get("error") if isinstance(error.details, dict) else None
+    items = body.get("details") if isinstance(body, dict) else None
+    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
+def _detail_type(item: dict[str, Any]) -> str:
+    kind = item.get("@type")
+    return kind.rsplit("/", 1)[-1] if isinstance(kind, str) else ""
+
+
+def _retry_after(details: list[dict[str, Any]]) -> float | None:
+    """google.rpc.RetryInfo의 retryDelay("59s" 형식)를 초로 바꾼다. 없거나 이상하면 None."""
+    for item in details:
+        delay = item.get("retryDelay")
+        if _detail_type(item) == "google.rpc.RetryInfo" and isinstance(delay, str):
+            match = _RETRY_DELAY.fullmatch(delay)
+            if match:
+                return float(match.group(1))
+    return None
+
+
+def _quota_ids(details: list[dict[str, Any]]) -> list[str]:
+    """google.rpc.QuotaFailure의 quotaId 목록. 예: GenerateRequestsPerMinutePerProjectPerModel."""
+    ids: list[str] = []
+    for item in details:
+        violations = item.get("violations")
+        if _detail_type(item) == "google.rpc.QuotaFailure" and isinstance(violations, list):
+            ids += [v["quotaId"] for v in violations if isinstance(v, dict) and "quotaId" in v]
+    return [quota for quota in ids if isinstance(quota, str)]
+
+
+def _classify_rate_limit(error: errors.APIError) -> Exception:
+    """429를 하루 한도, 분당 한도, 구분할 수 없음으로 나눈다. 본문은 메시지에 넣지 않는다."""
+    details = _error_details(error)
+    quota_ids = _quota_ids(details)
+    if any("PerDay" in quota for quota in quota_ids):
+        return LLMQuotaExhausted("Gemini daily request quota exhausted")
+    per_minute = any("PerMinute" in quota for quota in quota_ids)
+    return _RateLimited(_retry_after(details), per_minute)
+
+
 def _classify_api_error(error: errors.APIError) -> Exception:
-    """외부 오류 본문을 노출하지 않고 상태 코드만 분류한다."""
-    if error.code in {408, 429} or 500 <= error.code < 600:
+    """외부 오류 본문을 노출하지 않고 상태 코드와 429의 한도 종류만 분류한다."""
+    if error.code == 429:
+        return _classify_rate_limit(error)
+    if error.code == 408 or 500 <= error.code < 600:
         return LLMTransientError("Gemini service temporarily unavailable")
     return LLMPermanentError("Gemini authentication, model or request configuration failed")
 
 
 def _attempt_outcome(error: Exception) -> AttemptOutcome:
     """이미 분류된 생성 오류를 기록용 결과로 변환한다."""
+    if isinstance(error, LLMQuotaExhausted):
+        return "quota"
     if isinstance(error, LLMInvalidResponse):
         return "invalid"
     if isinstance(error, LLMTransientError):
@@ -279,6 +349,62 @@ def _parse_response(raw: str, validator: validators.Draft202012Validator) -> JSO
 async def _retry_delay(attempt: int) -> None:
     """지수 백오프에 최대 1초의 지연을 더한다."""
     await asyncio.sleep(2**attempt + secrets.randbelow(1000) / 1000)
+
+
+async def _rate_limit_delay(seconds: float) -> None:
+    """429 대기. 테스트가 실제로 기다리지 않도록 바꿔 끼울 수 있게 따로 둔다."""
+    await asyncio.sleep(seconds)
+
+
+def _jitter() -> float:
+    """여러 호출이 같은 순간에 다시 몰리지 않도록 0~1초를 더한다."""
+    return secrets.randbelow(1000) / 1000
+
+
+class _RetryBudget:
+    """한 번의 ask_llm·count_tokens 호출 안에서 재시도 횟수와 429 대기 합계를 센다."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._transient = 0
+        self._rate_limited = 0
+        self._waited_s = 0.0
+
+    async def wait_or_raise(self, failure: LLMTransientError) -> None:
+        """다시 시도할 수 있으면 기다리고, 아니면 공개 오류를 올린다. 대기는 세마포어 밖이다."""
+        if isinstance(failure, _RateLimited):
+            await self._wait_rate_limit(failure)
+            return
+        self._transient += 1
+        if self._transient >= _TRANSIENT_ATTEMPTS:
+            raise LLMTransientError(
+                f"Gemini request failed after {self._transient} attempts"
+            ) from None
+        await _retry_delay(self._transient - 1)
+
+    async def _wait_rate_limit(self, failure: _RateLimited) -> None:
+        settings = self._settings
+        if failure.retry_after_s is not None:
+            delay = failure.retry_after_s + _jitter()
+        else:
+            delay = settings.gemini_rate_limit_base_s * 2**self._rate_limited + _jitter()
+        self._rate_limited += 1
+        # 남은 대기 한도보다 긴 대기는 하지 않는다. 기다린 뒤에도 실패가 정해져 있으므로
+        # 작업 제한 시간만 쓴다.
+        if (
+            self._rate_limited >= settings.gemini_rate_limit_attempts
+            or self._waited_s + delay > settings.gemini_rate_limit_max_wait_s
+        ):
+            raise _rate_limit_exhausted(failure, self._rate_limited) from None
+        self._waited_s += delay
+        await _rate_limit_delay(delay)
+
+
+def _rate_limit_exhausted(failure: _RateLimited, attempts: int) -> Exception:
+    """기다릴 수 있는 만큼 기다린 뒤의 429. 분당 한도라고 밝힌 것만 일시적 오류로 남긴다."""
+    if failure.per_minute:
+        return LLMTransientError(f"Gemini rate limit persisted after {attempts} attempts")
+    return LLMQuotaExhausted("Gemini request quota appears exhausted")
 
 
 def _check_input(prompt: str, image: Image | None) -> None:
@@ -392,22 +518,21 @@ class GeminiClient:
         validator: validators.Draft202012Validator,
         on_attempt: Callable[[LLMAttempt], None] | None,
     ) -> JSONObject:
-        """일시적 오류만 최초 호출 포함 최대 세 번 시도한다."""
-        for attempt in range(3):
+        """일시적 오류만 재시도한다. 횟수와 대기는 _RetryBudget이 정한다."""
+        budget = _RetryBudget(self._settings)
+        attempt = 0
+        while True:
+            attempt += 1
             async with self._semaphore:
                 with self._active_request():
                     self._get_transport()
-                    result, failure, record = await self._attempt(operation, validator, attempt + 1)
+                    result, failure, record = await self._attempt(operation, validator, attempt)
             _notify_attempt(on_attempt, record)
             if not isinstance(failure, LLMTransientError):
                 if failure is not None:
                     raise failure
                 return cast(JSONObject, result)
-            else:
-                if attempt == 2:
-                    raise LLMTransientError("Gemini request failed after 3 attempts") from None
-                await _retry_delay(attempt)
-        raise AssertionError("Unreachable retry state")
+            await budget.wait_or_raise(failure)
 
     async def ask_llm(
         self,
@@ -434,7 +559,10 @@ class GeminiClient:
 
         Raises:
             LLMPermanentError: 키, 입력 또는 설정이 잘못되었거나 종료된 경우.
-            LLMTransientError: 일시적 오류가 세 번 지속된 경우.
+            LLMQuotaExhausted: 하루 한도 429이거나, 어느 한도인지 모르는 429가 대기 뒤에도
+                계속된 경우. LLMPermanentError의 하위 타입이다.
+            LLMTransientError: 408·5xx·전송 오류가 세 번, 또는 분당 한도 429가
+                Settings의 횟수·대기 상한까지 지속된 경우.
             LLMInvalidResponse: 응답 파싱 또는 검증이 실패한 경우.
         """
         try:
@@ -455,7 +583,8 @@ class GeminiClient:
 
     async def _count_request(self, prompt: str) -> int:
         """생성과 슬롯·전송 오류 정책을 공유하며 일시적 오류만 재시도한다."""
-        for attempt in range(3):
+        budget = _RetryBudget(self._settings)
+        while True:
             try:
                 async with self._semaphore:
                     with self._active_request():
@@ -463,11 +592,8 @@ class GeminiClient:
                             lambda transport: self._count_once(transport, prompt)
                         )
                         return _validated_token_count(total)
-            except LLMTransientError:
-                if attempt == 2:
-                    raise LLMTransientError("Gemini request failed after 3 attempts") from None
-                await _retry_delay(attempt)
-        raise AssertionError("Unreachable retry state")
+            except LLMTransientError as failure:
+                await budget.wait_or_raise(failure)
 
     async def _count_once(self, transport: GeminiTransport, prompt: str) -> int:
         """생성 전용 전송에는 명시적인 영구 오류를 반환한다."""
