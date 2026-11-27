@@ -14,9 +14,12 @@ from unittest.mock import MagicMock
 
 import pytest
 from google import genai
-from sqlalchemy import text
+from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from cloze.infra.db.blank_sets import BlankSetRow
+from cloze.infra.db.blanks import BlankRow
+from cloze.infra.db.documents import DocumentRow
 from cloze.infra.db.users import UserRow
 
 
@@ -68,6 +71,49 @@ async def _insert_user(session: AsyncSession) -> uuid.UUID:
     return user.id
 
 
+async def _insert_blank_set(session: AsyncSession, key: str = "k1") -> uuid.UUID:
+    """사용자·문서·세트 행을 하나씩 넣고 세트 ID를 돌려준다. 커밋하지 않는다.
+
+    blanks.set_id가 외래 키라 빈칸을 저장하려면 실제 세트 행(과 그 위의 사용자·문서 행)이
+    있어야 한다.
+    """
+    user_id = await _insert_user(session)
+    doc = DocumentRow(
+        owner_id=user_id,
+        sha256=uuid.uuid4().hex,
+        filename="t.pdf",
+        page_count=1,
+        size_bytes=1,
+        source_key="t",
+    )
+    session.add(doc)
+    await session.flush()
+    blank_set = BlankSetRow(
+        document_id=doc.id,
+        requested_by=user_id,
+        idempotency_key=key,
+        request_hash="h",
+        preset_requested="auto",
+        seed=1,
+        progress_total=1,
+    )
+    session.add(blank_set)
+    await session.flush()
+    return blank_set.id
+
+
+async def _delete_blank_set(session: AsyncSession, set_id: uuid.UUID) -> None:
+    """커밋한 세트를 지우고 커밋한다. 외래 키 순서대로 빈칸 → 세트 → 문서 → 사용자."""
+    blank_set = await session.get(BlankSetRow, set_id)
+    assert blank_set is not None
+    doc_id, user_id = blank_set.document_id, blank_set.requested_by
+    await session.execute(delete(BlankRow).where(BlankRow.set_id == set_id))
+    await session.execute(delete(BlankSetRow).where(BlankSetRow.requested_by == user_id))
+    await session.execute(delete(DocumentRow).where(DocumentRow.id == doc_id))
+    await session.execute(delete(UserRow).where(UserRow.id == user_id))
+    await session.commit()
+
+
 @pytest.fixture
 def wait_until_lock_wait() -> Callable[[async_sessionmaker[AsyncSession], int], Awaitable[None]]:
     return _wait_until_lock_wait
@@ -76,3 +122,13 @@ def wait_until_lock_wait() -> Callable[[async_sessionmaker[AsyncSession], int], 
 @pytest.fixture
 def insert_user() -> Callable[[AsyncSession], Awaitable[uuid.UUID]]:
     return _insert_user
+
+
+@pytest.fixture
+def insert_blank_set() -> Callable[..., Awaitable[uuid.UUID]]:
+    return _insert_blank_set
+
+
+@pytest.fixture
+def delete_blank_set() -> Callable[[AsyncSession, uuid.UUID], Awaitable[None]]:
+    return _delete_blank_set
