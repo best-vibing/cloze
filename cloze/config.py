@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # 로그인 실패 한도: 같은 아이디로 창 안에 이만큼 틀리면 막는다(신뢰성 설계 5절, [가설]).
     login_fail_limit: int = 5
     login_fail_window_s: float = 60.0
+    # 업로드 한도와 검사 하위 프로세스 제한(신뢰성 설계 2·5절, [가설]).
+    upload_max_bytes: int = 20 * 1024 * 1024
+    upload_max_pages: int = 30
+    upload_probe_timeout_s: float = 5.0
+    upload_probe_memory_mb: int = 256
     # 업로드 원본·이미지를 두는 폴더(로컬 디스크 저장소). 레포에는 커밋하지 않는다.
     # API·워커·정리 작업이 같은 폴더를 봐야 하므로 실행 위치와 무관한 절대 경로만 받는다.
     storage_dir: Path = REPO_ROOT / "data" / "storage"
