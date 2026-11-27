@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     gemini_max_concurrency: int = Field(default=4, gt=0)
     gemini_model: str = "gemini-3.5-flash-lite"
     gemini_timeout_s: float = 60.0
+    # 429(요청 한도) 재시도. 근거는 신뢰성 설계 2절. 408·5xx·전송 오류는 따로 최초 포함 3회다.
+    # 시도 횟수는 최초 호출 포함, 대기 상한은 한 호출이 429로 기다리는 시간의 합계다.
+    gemini_rate_limit_attempts: int = Field(default=5, ge=1)
+    gemini_rate_limit_base_s: float = Field(default=4.0, gt=0, allow_inf_nan=False)
+    gemini_rate_limit_max_wait_s: float = Field(default=120.0, ge=0, allow_inf_nan=False)
     # 기준 PDF 세트 위치. 저작권 때문에 레포에 두지 않고, 없으면 해당 테스트를 건너뛴다.
     samples_dir: Path | None = None
     # 기본값은 로컬 개발용(docker-compose.yml의 postgres·redis). 운영 주소는 .env로 넣는다.

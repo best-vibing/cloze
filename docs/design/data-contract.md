@@ -65,7 +65,8 @@ Gemini 선택기는 선택적 키워드 `seed`와 `temperature`를 함께 넘긴
 
 | 오류 | 언제 | `pipeline`의 처리 | 작업 결과 |
 |---|---|---|---|
-| `LLMTransientError` | 429·5xx·타임아웃이 infra 재시도(3회) 뒤에도 계속됨 | 잡지 않고 올려 보낸다 | 작업 재실행(끝난 페이지는 건너뜀) |
+| `LLMTransientError` | 5xx·408·타임아웃이 infra 재시도(3회) 뒤에도 계속되거나, 분당 한도 429가 대기 상한까지 계속됨([신뢰성 설계](reliability.md) 1·2절) | 잡지 않고 올려 보낸다 | 작업 재실행(끝난 페이지는 건너뜀) |
+| `LLMQuotaExhausted` (`LLMPermanentError`의 하위 타입) | 하루 한도 429, 또는 어느 한도인지 모르는 429가 대기 상한까지 계속됨 | `LLMPermanentError`와 같다. 하루 한도만 따로 다루는 처리는 [#120](https://github.com/best-vibing/cloze/issues/120) 다음 단계 | 계속 진행. 운영 경보를 즉시 보낸다 |
 | `LLMInvalidResponse` | 응답을 파싱할 수 없거나 스키마와 다름 | 검증 실패로 취급: 사유를 붙여 1회 재시도 → 규칙 기반 | 계속 진행 |
 | `LLMPermanentError` | 인증 실패, 설정 오류, 없는 모델 | 그 세트의 남은 페이지는 LLM을 부르지 않고 규칙 기반으로 만든다. 분석이면 기본 방식 | 계속 진행. 운영 경보를 즉시 보낸다 |
 
@@ -76,7 +77,10 @@ Gemini 선택기는 선택적 키워드 `seed`와 `temperature`를 함께 넘긴
 완료된 전송 시도마다 한 번 호출되는 동기 콜백이며, 자료형의 기준은
 [`LLMAttempt`와 `GeminiResponse`](../../cloze/infra/gemini.py)다.
 `attempt`는 ask_llm 호출마다 1부터 시작하고 `outcome`은 `ok`, `invalid`,
-`transient`, `permanent`다. 파싱·스키마 실패도 `invalid`로 기록한다.
+`transient`, `permanent`, `quota`다. 파싱·스키마 실패도 `invalid`로 기록한다.
+`quota`는 그 응답이 하루 한도라고 밝힌 429다. 분당 한도와 어느 한도인지 모르는 429는
+시도 당시 `transient`로 기록하며, 모르는 429가 계속되어 최종 예외가 `LLMQuotaExhausted`가
+되어도 앞선 기록은 바꾸지 않는다.
 `latency_ms`는 단조 시계로 잰 시도 시간이며 슬롯 대기·백오프·콜백 시간은 제외한다.
 `model`은 설정된 생성 모델이다. `input_tokens`/`output_tokens`는 SDK의 실제
 `usage_metadata.prompt_token_count`/`candidates_token_count`이며 추론 토큰은 합산하지 않는다.
