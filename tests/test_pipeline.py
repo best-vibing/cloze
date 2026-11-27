@@ -58,6 +58,17 @@ def test_prepare_reads_short_korean_fixture() -> None:
     assert sum(page.has_text for page in pipeline.prepare(pdf)) >= 4
 
 
+@pytest.mark.parametrize("name", ["sample.pdf", "korean.pdf"])
+def test_analyze_prepared_pdf_without_live_api(name: str) -> None:
+    pdf = (Path(__file__).parent / "fixtures" / name).read_bytes()
+    pages = pipeline.prepare(pdf)
+    response = {"doc_type": "강의 슬라이드", "preset": "concept", "reason": "테스트 응답"}
+    ask = AsyncMock(return_value=response)
+
+    assert asyncio.run(pipeline.analyze_document(pages, ask)) == response | {"source": "llm"}
+    ask.assert_awaited_once()
+
+
 def test_prepare_rejects_document_with_only_repeated_footer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
