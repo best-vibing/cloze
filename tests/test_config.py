@@ -19,8 +19,22 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "CLOZE_DATABASE_URL",
         "CLOZE_TASK_TIMEOUT_S",
         "CLOZE_QUEUE_IDLE_TIMEOUT_MS",
+        "CLOZE_STORAGE_DIR",
     ):
         monkeypatch.delenv(name, raising=False)
+
+
+def test_storage_dir_does_not_depend_on_working_directory(tmp_path: Path) -> None:
+    # API·워커·정리 작업을 서로 다른 폴더에서 띄워도 같은 저장소를 봐야 한다(#100 리뷰).
+    settings = Settings()
+    assert settings.storage_dir.is_absolute()
+    assert not settings.storage_dir.is_relative_to(tmp_path)
+
+
+def test_relative_storage_dir_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLOZE_STORAGE_DIR", "data/storage")
+    with pytest.raises(ValidationError, match="storage_dir"):
+        Settings()
 
 
 def test_defaults_without_env() -> None:
