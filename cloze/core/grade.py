@@ -103,10 +103,30 @@ def edit_distance(a: str, b: str) -> int:
     return prev[-1]
 
 
-def _same_text(given: str, expected: str) -> bool:
-    """정규화한 뒤 같거나, 양쪽 끝의 조사를 떼면 같은가(조사 목록은 filter와 공유)."""
+def _same_text(given: str, expected: str, *, ignore_spaces: bool = True) -> bool:
+    """정규화한 뒤 같거나, 양쪽 끝의 조사를 떼면 같은가(조사 목록은 filter와 공유).
+
+    ignore_spaces면 공백을 모두 지운 뒤에도 같은 비교를 한 번 더 한다. 구 정답을 붙여 쓰거나
+    붙임표로 이어 쓴 입력(``oxidativephosphorylation``)과 한국어 띄어쓰기 차이를 맞게 본다.
+    조사는 공백을 지운 뒤 뗀다. 숫자 칸은 끈다(is_correct).
+
+    Examples:
+        >>> _same_text("oxidative-phosphorylation", "Oxidative phosphorylation")
+        True
+        >>> _same_text("데이터분석을", "데이터 분석")
+        True
+        >>> _same_text("데이터분석", "데이터 분석", ignore_spaces=False)
+        False
+    """
     g, e = normalize(given), normalize(expected)
-    return g != "" and (g == e or normalize_ko(g) == normalize_ko(e))
+    if g == "":
+        return False
+    if g == e or normalize_ko(g) == normalize_ko(e):
+        return True
+    if not ignore_spaces:
+        return False
+    g, e = g.replace(" ", ""), e.replace(" ", "")
+    return g == e or normalize_ko(g) == normalize_ko(e)
 
 
 def _parse_number(text: str) -> Decimal | None:
@@ -131,7 +151,10 @@ def _same_number(given: str, expected: str) -> bool:
 
 def is_correct(given: str, key: AnswerKey) -> bool:
     """판정 1~3단계: 정답·변형 목록과 같거나, 숫자 칸이면 허용 범위 안인가."""
-    if any(_same_text(given, accepted) for accepted in (key.answer, *key.variants)):
+    # 숫자 칸은 글자 비교에서 공백을 지우지 않는다. 숫자의 공백은 3단계(_same_number)가 다룬다.
+    ignore_spaces = key.type != "number"
+    accepted = (key.answer, *key.variants)
+    if any(_same_text(given, a, ignore_spaces=ignore_spaces) for a in accepted):
         return True
     return key.type == "number" and _same_number(given, key.answer)
 
