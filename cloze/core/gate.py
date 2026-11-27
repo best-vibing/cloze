@@ -4,7 +4,7 @@ import math
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from itertools import pairwise, zip_longest
+from itertools import zip_longest
 from typing import Literal, TypedDict
 
 from cloze.core.filter import normalize_ko, strip_punctuation, token_reason
@@ -22,14 +22,15 @@ from cloze.core.models import (
     Slot,
     Token,
 )
-from cloze.core.select.rule import MAX_PHRASE_TOKENS, target_count
+from cloze.core.phrase import MAX_PHRASE_TOKENS, contiguous
+from cloze.core.select.rule import target_count
 
 # [가설] 글자 크기에 곱해 사방에 더할 여백을 구한다.
 PAD_RATIO = 0.15
 MIN_SURVIVAL = 0.6
 MAX_ANSWER_LOCATIONS = 3
 # 칸 하나: 토큰 하나 또는 같은 줄에서 id가 이어진 토큰 여러 개(구).
-# 구의 최대 길이는 규칙 선택기의 MAX_PHRASE_TOKENS와 같다.
+# 구 모양 규칙은 cloze/core/phrase.py에 있고 두 선택기도 같은 것을 쓴다.
 type Unit = list[Token]
 type UnitKey = tuple[str, ...]
 type RejectionReason = (
@@ -132,7 +133,7 @@ def _span_reason(
     if any(token_id not in tokens for token_id in span):
         return "unknown_token"
     unit = [tokens[token_id] for token_id in span]
-    if not _contiguous(unit):
+    if not contiguous(unit):
         return "invalid_span"
     if any(token.id in seen for token in unit):
         return "duplicate_token"
@@ -142,12 +143,6 @@ def _span_reason(
     if any(token.id not in allowed for token in unit):
         return "not_candidate"
     return _unit_geometry_reason(page, unit, seen)
-
-
-def _contiguous(unit: Unit) -> bool:
-    return all(
-        right.id == left.id + 1 and right.line_id == left.line_id for left, right in pairwise(unit)
-    )
 
 
 def _unit_geometry_reason(
@@ -206,7 +201,7 @@ def _occurrences(page: PageTokens, sizes: set[int]) -> dict[UnitKey, list[Unit]]
     for size in sizes:
         for start in range(len(page.tokens) - size + 1):
             window = page.tokens[start : start + size]
-            if _contiguous(window):
+            if contiguous(window):
                 found[_unit_key(window)].append(window)
     return found
 

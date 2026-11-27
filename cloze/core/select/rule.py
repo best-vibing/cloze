@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from cloze.core.filter import EDGE_PUNCTUATION, excluded_count, normalize_ko, word_key
 from cloze.core.models import PageCandidates, PageTokens, Policy, Selection, Slot, Token
+from cloze.core.phrase import MAX_PHRASE_TOKENS, adjacent
 
 # [가설] 신호별 가중치. 합은 1이다. 실데이터로 보정한다(selection-and-quality-gate.md 2.5절).
 WEIGHT_SIZE = 0.35
@@ -24,8 +25,6 @@ SIZE_RATIO_CAP = 2.0
 HEADING_LINE_RATIO = 0.1
 BOLD_MARKERS = ("BOLD", "BLACK", "HEAVY")
 MAX_PER_LINE = 2
-# [가설] 구 하나에 담을 최대 토큰 수. 이보다 긴 강조 구간은 용어보다 문장·제목으로 보고 묶지 않는다.
-MAX_PHRASE_TOKENS = 3
 # [가설] 굵지 않아도 페이지 중앙값의 이 배수 이상인 글자 크기면 강조로 보고 구로 묶을 수 있다.
 PHRASE_SIZE_RATIO = 1.2
 # [가설] 이웃 토큰의 글자 크기 차이가 이 값(pt) 이하이면 같은 스타일로 본다.
@@ -182,8 +181,9 @@ def _runs(tokens: list[Token], median: float) -> list[Unit]:
 
 def _joins(left: Token, right: Token, median: float) -> bool:
     """같은 줄의 바로 다음 토큰이고, 둘 다 같은 강조 스타일이며, 사이에 구를 끊는 표시가 없는가."""
-    adjacent = right.id == left.id + 1 and right.line_id == left.line_id
-    return adjacent and _same_emphasis(left, right, median) and not _breaks(left, right)
+    return (
+        adjacent(left, right) and _same_emphasis(left, right, median) and not _breaks(left, right)
+    )
 
 
 def _same_emphasis(left: Token, right: Token, median: float) -> bool:
