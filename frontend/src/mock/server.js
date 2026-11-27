@@ -4,7 +4,8 @@
 // 주소 뒤에 ?scenario=이름 을 붙여 흐름을 고른다.
 //   (없음)        queued → running → done
 //   partial       queued → running → partial (2쪽 처리 실패)
-//   failed        queued → running → failed (unreadable_pdf)
+//   failed        queued → running → failed (unreadable_pdf). 같은 PDF로 다시 만들어도 같아 다시 만들기가 없다
+//   processing_failed queued → running → failed (processing_failed). 다시 만들기를 누를 수 있다
 //   unauthorized  로그인 전 상태. 로그인 외 모든 요청이 401 unauthorized
 //   encrypted_pdf · too_many_pages · daily_limit_exceeded · too_many_running · service_limit_exceeded
 //                 업로드가 그 코드로 거절된다(계약 3절)
@@ -37,6 +38,12 @@ const UPLOAD_REJECTIONS = {
   daily_limit_exceeded: [429, "오늘 처리할 수 있는 쪽 수를 넘었어요."],
   too_many_running: [429, "진행 중인 작업이 너무 많아요."],
   service_limit_exceeded: [503, "오늘은 더 만들 수 없어요."],
+};
+
+// 시나리오 이름 → 끝난 세트의 실패 사유(계약 2절 error.code).
+const FAILURES = {
+  failed: { code: "unreadable_pdf", message: "인식이 잘 안 됐어요, 다시 올려 주세요." },
+  processing_failed: { code: "processing_failed", message: "처리하다 문제가 생겼어요. 다시 만들어 주세요." },
 };
 
 // 정답은 이 안에만 둔다. 조회 응답(getBlankSet)에는 절대 넣지 않는다(D2).
@@ -171,6 +178,7 @@ function getBlankSet(_init, setId) {
   const total = PAGES.length;
   const body = {
     blank_set_id: setId,
+    document_id: set.document_id, // 다시 만들기에 쓴다(#118)
     status,
     progress: { done: { queued: 0, running: 1 }[status] ?? total, total },
     preset_requested: set.preset_requested,
@@ -182,9 +190,7 @@ function getBlankSet(_init, setId) {
   // partial에서 실패한 쪽은 pages에 넣지 않는다(계약 2절 GET /blank-sets/{id}, #93).
   if (status === "done") body.pages = PAGES.map((p) => withImage(p, set));
   if (status === "partial") body.pages = PAGES.slice(0, 1).map((p) => withImage(p, set));
-  if (status === "failed") {
-    body.error = { code: "unreadable_pdf", message: "인식이 잘 안 됐어요, 다시 올려 주세요." };
-  }
+  if (status === "failed") body.error = FAILURES[scenario];
   return reply(200, body);
 }
 
@@ -291,7 +297,8 @@ function newSet(documentId, preset) {
 function statusOf(set) {
   if (set.polls <= 1) return "queued";
   if (set.polls <= POLLS_UNTIL_FINISHED) return "running";
-  return ["partial", "failed"].includes(scenario) ? scenario : "done";
+  if (scenario === "partial") return "partial";
+  return scenario in FAILURES ? "failed" : "done";
 }
 
 function shownBlankIds(set) {
