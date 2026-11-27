@@ -6,7 +6,8 @@
 //   partial       queued → running → partial (2쪽 처리 실패)
 //   failed        queued → running → failed (unreadable_pdf). 같은 PDF로 다시 만들어도 같아 다시 만들기가 없다
 //   processing_failed queued → running → failed (processing_failed). 다시 만들기를 누를 수 있다
-//   unauthorized  로그인 전 상태. 로그인 외 모든 요청이 401 unauthorized
+//   unauthorized  로그인 전 상태. 로그인 외 모든 요청이 401 unauthorized. 비밀번호 "wrong"은 invalid_credentials
+//   login_locked  unauthorized와 같지만 로그인이 늘 429 too_many_login_attempts(같은 아이디 실패 한도, #125)
 //   encrypted_pdf · too_many_pages · daily_limit_exceeded · too_many_running · service_limit_exceeded
 //                 업로드가 그 코드로 거절된다(계약 3절)
 //   lost_response 업로드를 서버는 받았는데 응답이 끊긴다(키마다 처음 한 번). 같은 키로 다시 보내면 같은 세트가 온다
@@ -14,7 +15,8 @@
 //   image_expired 끝난 세트를 처음 조회했을 때 받은 이미지 주소가 열리지 않는다(만료). 다시 조회하면 새 주소가 열린다
 //   image_missing 이미지 주소가 늘 열리지 않는다. 화면은 한 번 다시 조회한 뒤 쪽마다 오류를 보인다
 //   attempt_lost  세트마다 첫 답안 제출과 시도마다 첫 정답 공개가, 서버는 처리했는데 응답이 끊긴다. 다시 누르면 된다
-//   session_expired 풀이 화면까지는 되고, 답안 제출과 정답 공개만 401 unauthorized(로그인이 풀린 경우)
+//   session_expired 풀이 화면까지는 되고, 첫 답안 제출이나 정답 공개 때 로그인이 풀려 401 unauthorized.
+//                 다시 로그인하면 그 뒤로는 된다
 // 처리 중(queued·running)인 세트에 답안을 내면 어느 시나리오든 409 not_ready다.
 // 확장자가 .pdf가 아니면 415 not_pdf, 20MB를 넘으면 413 file_too_large는 시나리오와 상관없이 낸다.
 // 같은 PDF를 다시 올렸을 때 기존 document_id를 돌려주는 것(계약 2절 POST /documents)은 흉내 내지 않는다.
@@ -63,12 +65,13 @@ const PAGES = [
 ];
 
 const state = {
-  loggedIn: scenario !== "unauthorized",
+  loggedIn: !["unauthorized", "login_locked"].includes(scenario),
   sets: new Map([[DEMO_SET_ID, newSet(DEMO_DOCUMENT_ID, "auto")]]),
   documents: new Map([[DEMO_DOCUMENT_ID, { filename: "세포생물학-3주차.pdf", sets: [DEMO_SET_ID] }]]),
   attempts: new Map(), // attempt_id → {set_id, submitted_at, score, after_reveal, revealed_at}
   idempotency: new Map(), // "경로 키" → {fingerprint: 요청 내용, response: 처음 돌려준 응답}
   lostKeys: new Set(), // lost_response·gateway_timeout·attempt_lost 시나리오에서 응답을 한 번 끊은 키·요청
+  expired: false, // session_expired 시나리오에서 로그인을 이미 한 번 풀었는가
 };
 
 const ROUTES = [
@@ -100,7 +103,10 @@ export async function handle(method, path, init) {
 
 function login(init) {
   const { login_id, password } = JSON.parse(init.body);
-  if (!login_id || !password) {
+  if (scenario === "login_locked") {
+    return error(429, "too_many_login_attempts", "잠시 뒤에 다시 시도해 주세요.");
+  }
+  if (!login_id || !password || password === "wrong") {
     return error(401, "invalid_credentials", "아이디 또는 비밀번호가 맞지 않아요.");
   }
   state.loggedIn = true;
@@ -196,7 +202,8 @@ function getBlankSet(_init, setId) {
 
 function submitAttempt(init, setId) {
   // 실제 서버처럼 로그인 확인을 404·409보다 먼저 한다.
-  if (scenario === "session_expired") return sessionExpired();
+  const expired = sessionExpired();
+  if (expired) return expired;
   const set = state.sets.get(setId);
   if (!set) return notFound();
   if (["queued", "running"].includes(statusOf(set))) {
@@ -234,7 +241,8 @@ function listAttempts(_init, setId) {
 }
 
 function revealAttempt(_init, attemptId) {
-  if (scenario === "session_expired") return sessionExpired();
+  const expired = sessionExpired();
+  if (expired) return expired;
   const attempt = state.attempts.get(attemptId);
   if (!attempt) return notFound();
   const set = state.sets.get(attempt.set_id);
@@ -362,6 +370,10 @@ function notFound() {
   return error(404, "not_found", "찾을 수 없어요.");
 }
 
+/** session_expired 시나리오: 처음 한 번만 로그인을 풀고 401을 준다. 다시 로그인하면 그 뒤 요청은 통과한다. */
 function sessionExpired() {
+  if (scenario !== "session_expired" || state.expired) return null;
+  state.expired = true;
+  state.loggedIn = false;
   return error(401, "unauthorized", "로그인이 필요해요.");
 }

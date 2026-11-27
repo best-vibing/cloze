@@ -1,12 +1,15 @@
 <script>
   // 처음 화면: PDF 하나를 받아 업로드하고, 받은 세트 화면으로 넘어간다(#35).
   // 빈칸 방식은 고르지 않는다. 서버가 자료를 보고 정하도록 preset은 auto로 보낸다(데이터 계약 1절).
-  import { uploadDocument } from "./api.js";
+  import { onMount } from "svelte";
+  import { ApiError, LOGGED_IN, logout, uploadDocument } from "./api.js";
   import { LIMITS, beforeSendMessage, canResend, uploadErrorMessage } from "./messages.js";
 
   let dragging = $state(false);
   let busy = $state(false);
   let problem = $state("");
+  let signOutProblem = $state("");
+  let loginBlocked = false; // 지금 보이는 문구가 로그인이 풀려 업로드가 거절된 것인가
   // 결과를 받지 못한 업로드(응답 끊김·5xx). 서버는 받았을 수도 있으니, 다시 보낼 때 같은 Idempotency-Key를 써야 세트가 두 개 생기지 않는다.
   let retry = $state(null);
   let picker;
@@ -15,6 +18,7 @@
     // 링크 글자처럼 파일이 없는 것을 놓았으면 아무것도 하지 않는다.
     if (busy || files.length === 0) return;
     retry = null;
+    loginBlocked = false;
     if (files.length > 1) return (problem = beforeSendMessage("multiple_files"));
     const [file] = files;
     // 서버도 같은 검사를 한다. 여기서 먼저 거르는 것은 보내기 전에 바로 알려 주기 위해서다.
@@ -27,16 +31,46 @@
   async function send(request) {
     busy = true;
     problem = "";
+    loginBlocked = false;
     retry = null;
     try {
       const { blank_set_id } = await uploadDocument(request.file, "auto", request.key);
       location.hash = `#/sets/${blank_set_id}`;
     } catch (e) {
       problem = uploadErrorMessage(e);
-      if (canResend(e)) retry = request;
+      // 로그인이 풀려 거절됐으면 서버는 아무것도 만들지 않았다. 그래도 로그인한 뒤 파일을 다시 고르지 않고
+      // "다시 보내기"로 보낼 수 있게 남겨 둔다(같은 키여도 서버에 기록이 없어 새 업로드가 된다).
+      loginBlocked = e instanceof ApiError && e.code === "unauthorized";
+      if (canResend(e) || loginBlocked) retry = request;
     } finally {
       busy = false;
       picker.value = ""; // 같은 파일을 다시 골라도 change가 오게 한다
+    }
+  }
+
+  // 로그인한 뒤에는 "로그인이 필요해요" 문구만 지운다. 보내지 못한 업로드는 "다시 보내기"로 남는다.
+  onMount(() => {
+    const clear = () => {
+      if (loginBlocked) problem = "";
+      loginBlocked = false;
+    };
+    window.addEventListener(LOGGED_IN, clear);
+    return () => window.removeEventListener(LOGGED_IN, clear);
+  });
+
+  async function signOut() {
+    if (busy) return;
+    problem = "";
+    signOutProblem = "";
+    loginBlocked = false;
+    retry = null; // 다른 사람이 로그인했을 때 앞사람의 파일을 다시 보내지 않게 한다
+    try {
+      await logout(); // 성공하면 App이 로그인 창을 띄운다
+    } catch (e) {
+      // 401이면 이미 로그아웃된 상태라 App이 로그인 창을 띄웠다.
+      if (!(e instanceof ApiError && e.code === "unauthorized")) {
+        signOutProblem = "로그아웃하지 못했어요. 다시 눌러 주세요.";
+      }
     }
   }
 
@@ -53,6 +87,10 @@
 <header>
   <!-- 로고 원본의 비율을 지키려고 높이만 정한다. 폭은 그림 비율대로 따라온다. -->
   <a class="logo" href="#/"><img src="/logo.webp" alt="Cloze" height="40" /></a>
+  <div class="account">
+    <span class="problem" role="alert">{signOutProblem}</span>
+    <button type="button" class="signout" disabled={busy} onclick={signOut}>로그아웃</button>
+  </div>
 </header>
 
 <main>
@@ -103,7 +141,19 @@
 
 <style>
   header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     padding: 12px 16px;
+  }
+  .account {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .signout {
+    padding: 6px 14px;
+    font-size: 0.9rem;
   }
   .logo {
     display: inline-block;

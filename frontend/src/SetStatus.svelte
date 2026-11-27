@@ -5,6 +5,7 @@
   import { onMount, tick } from "svelte";
   import {
     ApiError,
+    LOGGED_IN,
     getBlankSet,
     listAttempts,
     remakeBlankSet,
@@ -52,6 +53,7 @@
     let timer;
     // 요청을 기다리는 동안 화면이 사라지면, 응답이 온 뒤 타이머를 다시 걸지 않는다.
     let stopped = false;
+    let halted = false; // 401·404를 받아 조회를 멈췄는가
     async function poll() {
       try {
         blankSet = await getBlankSet(setId);
@@ -63,14 +65,28 @@
       } catch (e) {
         // 서버 문장(message)은 텍스트로만 넣는다. Svelte {…}는 HTML로 해석하지 않는다.
         problem = e instanceof ApiError ? e.message : NETWORK;
-        if (e instanceof ApiError && e.status < 500) return; // 401·404는 다시 물어봐도 같다
+        // 401·404는 다시 물어봐도 같으니 멈춘다. 401이면 로그인한 뒤 resume()이 다시 시작한다.
+        if (e instanceof ApiError && e.status < 500) {
+          halted = true;
+          return;
+        }
       }
       if (!stopped) timer = setTimeout(poll, POLL_MS);
     }
     poll();
+    // 로그인한 뒤: 멈춘 조회는 다시 시작하고(돌고 있는 조회는 그대로 둔다), 로그인이 필요해 실패한 버튼 동작의
+    // 문구는 지운다. 그 동작(제출·정답 보기·다시 만들기)은 사용자가 다시 누른다. 입력한 답은 그대로 남아 있다.
+    function resume() {
+      if (actionProblem) actionProblem = "";
+      if (!halted) return;
+      halted = false;
+      poll();
+    }
+    window.addEventListener(LOGGED_IN, resume);
     return () => {
       stopped = true;
       clearTimeout(timer);
+      window.removeEventListener(LOGGED_IN, resume);
     };
   });
 

@@ -9,6 +9,11 @@ export const isMock = mockEnv === undefined ? import.meta.env.DEV : mockEnv === 
 // Mock이 아니면 불러오지 않아, 운영 빌드에는 mock/server.js가 들어가지 않는다.
 const mock = isMock ? await import("./mock/server.js") : null;
 
+// 로그인 상태를 묻는 API가 없어서(계약 2절), 화면은 401 unauthorized를 받고서야 로그인이 필요한 줄 안다.
+// window 이벤트 두 개로 알린다. App은 로그인 창을 열고 닫고, 각 화면은 로그인 뒤 멈췄던 요청을 다시 한다.
+export const LOGIN_NEEDED = "cloze-login-needed";
+export const LOGGED_IN = "cloze-logged-in";
+
 /** 서버가 돌려준 오류. 모양은 계약 3절의 {"error": {"code", "message"}}다. */
 export class ApiError extends Error {
   constructor(status, code, message) {
@@ -38,15 +43,25 @@ async function request(method, path, { json, form, headers = {} } = {}) {
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const error = body?.error ?? { code: "unknown", message: "잠시 후 다시 시도해 주세요." };
+    // 세션 쿠키가 없거나 끊겼다. 화면마다 따로 처리하지 않고 App이 로그인 창을 띄운다.
+    // 로그인 실패(invalid_credentials)는 코드가 달라 여기에 걸리지 않는다.
+    if (error.code === "unauthorized") window.dispatchEvent(new Event(LOGIN_NEEDED));
     throw new ApiError(res.status, error.code, error.message);
   }
   return body;
 }
 
 // ---- 인증 (#35) ----
-export const login = (loginId, password) =>
-  request("POST", "/auth/login", { json: { login_id: loginId, password } });
-export const logout = () => request("POST", "/auth/logout");
+/** 로그인. 성공하면 LOGGED_IN을 알린다. 실패는 ApiError(invalid_credentials·too_many_login_attempts)다. */
+export async function login(loginId, password) {
+  await request("POST", "/auth/login", { json: { login_id: loginId, password } });
+  window.dispatchEvent(new Event(LOGGED_IN));
+}
+/** 로그아웃. 성공하면 LOGIN_NEEDED를 알려 로그인 창이 뜬다. */
+export async function logout() {
+  await request("POST", "/auth/logout");
+  window.dispatchEvent(new Event(LOGIN_NEEDED));
+}
 
 // ---- 문서 (#35) ----
 /** 업로드. key는 사용자 동작 한 번마다 crypto.randomUUID()로 만들고, 재전송에는 같은 키를 쓴다. */
