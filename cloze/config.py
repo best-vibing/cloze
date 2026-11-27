@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     # 웹 페이지 빌드 결과 폴더. frontend/ 는 빌드 전 소스라 내보내지 않는다.
     # 없으면 API만 띄운다.
     static_dir: Path = Path("frontend/dist")
+    # 세션 쿠키 서명 키. 기본값을 두지 않는다: 없으면 API 앱이 뜨지 않는다(create_app).
+    # 워커·alembic은 쓰지 않으므로 여기서는 필수로 두지 않는다.
+    session_secret: SecretStr | None = None
+    # 쿠키 Secure 속성. https가 아닌 로컬 개발에서만 끈다(데이터 계약 2절 COOKIE_SECURE).
+    cookie_secure: bool = True
+    # 로그인 실패 한도: 같은 아이디로 창 안에 이만큼 틀리면 막는다(신뢰성 설계 5절, [가설]).
+    login_fail_limit: int = 5
+    login_fail_window_s: float = 60.0
     # 업로드 원본·이미지를 두는 폴더(로컬 디스크 저장소). 레포에는 커밋하지 않는다.
     # API·워커·정리 작업이 같은 폴더를 봐야 하므로 실행 위치와 무관한 절대 경로만 받는다.
     storage_dir: Path = REPO_ROOT / "data" / "storage"

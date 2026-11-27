@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from cloze.api.app import create_app
 from cloze.api.errors import STATUS, ApiError
@@ -18,7 +18,9 @@ class Body(BaseModel):
 
 
 def make_app(static_dir: Path) -> FastAPI:
-    app = create_app(Settings(public_origin=ORIGIN, static_dir=static_dir))
+    app = create_app(
+        Settings(public_origin=ORIGIN, static_dir=static_dir, session_secret=SecretStr("t" * 32))
+    )
 
     @app.get("/boom")
     async def boom() -> None:
