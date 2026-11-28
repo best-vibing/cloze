@@ -6,7 +6,12 @@ import pytest
 from PIL import Image
 
 from cloze.core import pipeline
-from cloze.core.errors import LLMInvalidResponse, LLMPermanentError, LLMTransientError
+from cloze.core.errors import (
+    LLMInvalidResponse,
+    LLMPermanentError,
+    LLMQuotaExhausted,
+    LLMTransientError,
+)
 from cloze.core.models import PageInfo, PageTokens, Policy, Token
 
 
@@ -129,8 +134,11 @@ def test_build_selection_paths(outcomes: list[object], expected: str, attempts: 
         assert "재시도" in ask.await_args_list[1].args[0]
 
 
-def test_build_after_permanent_error_skips_completed_and_keeps_low_text_pages() -> None:
-    ask = AsyncMock(side_effect=LLMPermanentError("unavailable"))
+@pytest.mark.parametrize("failure", [LLMPermanentError, LLMQuotaExhausted])
+def test_build_after_permanent_error_skips_completed_and_keeps_low_text_pages(
+    failure: type[LLMPermanentError],
+) -> None:
+    ask = AsyncMock(side_effect=failure("unavailable"))
     factory = Mock(return_value=ask)
 
     async def run() -> list[pipeline.PageResult]:
