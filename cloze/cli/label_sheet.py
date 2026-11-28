@@ -1,6 +1,7 @@
 """품질 게이트 기준값 보정(#40) 1차용 라벨 시트. 라벨 기준은 docs/design/label-guide.md.
 
 uv run python -m cloze.cli.label_sheet make [--out FILE] [--force]
+uv run python -m cloze.cli.label_sheet from-pipeline --document PDF DIR --density N --out FILE
 uv run python -m cloze.cli.label_sheet check FILE
 
 make: CLOZE_SAMPLES_DIR 폴더의 PDF마다 규칙 기반 선택 결과를 뽑아 빈칸 한 칸이 한 줄인 CSV로 쓴다.
@@ -10,6 +11,7 @@ check: 라벨을 채운 CSV에서 label 값이 좋음 / 애매 / 나쁨 중 하�
 
 import argparse
 import csv
+import json
 import math
 import re
 import statistics
@@ -20,13 +22,24 @@ from io import StringIO
 from pathlib import Path
 
 from pdfplumber.utils.exceptions import PdfminerException
+from pydantic import BaseModel, Field
 
 from cloze.cli.__main__ import _answers
 from cloze.config import load_settings
 from cloze.core.extract import EXTRACT_VERSION, extract_tokens
 from cloze.core.filter import filter_candidates, word_key
 from cloze.core.gate import answer_occurrences, answer_unit_key
-from cloze.core.models import DEFAULT_DENSITY, PageTokens, Policy, Selection, Token
+from cloze.core.models import (
+    DEFAULT_DENSITY,
+    SCHEMA_VERSION,
+    Blank,
+    PageCandidates,
+    PageTokens,
+    Policy,
+    Selection,
+    Token,
+)
+from cloze.core.pipeline import SelectionSource
 from cloze.core.quality_calibration import LABELS
 from cloze.core.select.rule import (
     DocStats,
@@ -123,6 +136,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     if args.command == "make":
         _make(args.out, args.force)
+    elif args.command == "from-pipeline":
+        try:
+            _from_pipeline(args.document, args.out, args.density, args.force)
+        except (OSError, ValueError) as error:
+            raise SystemExit(str(error)) from None
     else:
         _check(args.file)
 
@@ -133,6 +151,13 @@ def _parser() -> argparse.ArgumentParser:
     make = commands.add_parser("make", help="CLOZE_SAMPLES_DIR의 PDF로 라벨 시트를 만든다")
     make.add_argument("--out", type=Path, default=DEFAULT_OUT)
     make.add_argument("--force", action="store_true", help="이미 있는 파일을 덮어쓴다")
+    pipeline = commands.add_parser("from-pipeline", help="저장한 페이지 결과로 라벨 시트를 만든다")
+    pipeline.add_argument(
+        "--document", nargs=2, action="append", required=True, metavar=("PDF", "DIR")
+    )
+    pipeline.add_argument("--out", type=Path, required=True)
+    pipeline.add_argument("--density", type=float, required=True)
+    pipeline.add_argument("--force", action="store_true")
     check = commands.add_parser("check", help="라벨을 채운 시트의 label·labeler 값을 검사한다")
     check.add_argument("file", type=Path)
     return parser
@@ -140,8 +165,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _make(out: Path, force: bool) -> None:
     pdfs = _sample_pdfs(load_settings().samples_dir)
-    if out.exists() and not force:
-        raise SystemExit(f"{out}이 이미 있다. 채운 라벨을 지키려고 멈춘다(덮어쓰려면 --force).")
+    _check_output_path(out, force)
     rows: list[Row] = []
     for pdf in pdfs:
         try:
@@ -149,13 +173,106 @@ def _make(out: Path, force: bool) -> None:
         except (OSError, PdfminerException) as error:
             raise SystemExit(f"{pdf.name}: PDF를 읽을 수 없다: {error}") from None
         rows.extend(pdf_result)
+    _write_sheet(out, rows, force=force)
+    print(f"{len(pdfs)}개 PDF, {len(rows)}칸 → {out} (seed={SEED}, density={DENSITY})")
+
+
+def _check_output_path(out: Path, force: bool) -> None:
+    if out.exists() and not force:
+        raise SystemExit(f"{out}이 이미 있다. 채운 라벨을 지키려고 멈춘다(덮어쓰려면 --force).")
+
+
+def _write_sheet(
+    out: Path, rows: list[Row], *, force: bool, columns: tuple[str, ...] = COLUMNS
+) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     # 엑셀이 한글을 깨뜨리지 않도록 BOM을 붙인다. 읽을 때는 encoding="utf-8-sig"로 연다.
-    with out.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=COLUMNS)
+    with out.open("w" if force else "x", encoding="utf-8-sig", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
-    print(f"{len(pdfs)}개 PDF, {len(rows)}칸 → {out} (seed={SEED}, density={DENSITY})")
+
+
+class _PipelineQuality(BaseModel):
+    survival_ratio: float = Field(ge=0, le=1)
+
+
+class _PipelineSelection(BaseModel):
+    source: SelectionSource
+    quality: _PipelineQuality
+
+
+class _PipelinePage(PageTokens):
+    schema_version: int
+    extract_version: int
+    blanks: list[Blank]
+    selection: _PipelineSelection
+
+
+def _load_pipeline_page(path: Path) -> tuple[_PipelinePage, PageCandidates, Policy]:
+    page = _PipelinePage.model_validate_json(path.read_bytes())
+    if page.schema_version != SCHEMA_VERSION or page.extract_version != EXTRACT_VERSION:
+        raise ValueError(f"{path}: 지원하지 않는 파이프라인 결과 버전")
+    stages_path = path.with_suffix(".stages.json")
+    if not stages_path.is_file():
+        raise ValueError(f"{path}: pipeline --dump-stages의 단계별 JSON이 필요하다")
+    stage = json.loads(stages_path.read_bytes())
+    if not isinstance(stage, dict) or "policy" not in stage:
+        raise ValueError(
+            f"{stages_path}: 실행 정책이 없다. 최신 pipeline --dump-stages로 다시 실행한다"
+        )
+    policy = Policy.model_validate(stage["policy"])
+    candidates = PageCandidates.model_validate(stage.get("filter"))
+    if candidates.page_no != page.page.page_no or not path.with_suffix(".webp").is_file():
+        raise ValueError(f"{path}: 같은 쪽의 필터 결과와 가림 이미지가 필요하다")
+    token_ids = {token.id for token in page.tokens}
+    if any(not token_ids.issuperset(blank.token_ids) for blank in page.blanks):
+        raise ValueError(f"{path}: 빈칸에 없는 토큰 ID가 있다")
+    orders = {blank.order for blank in page.blanks}
+    if orders != set(range(len(page.blanks))):
+        raise ValueError(f"{path}: 빈칸 순서는 0부터 연속해야 한다")
+    if bool(page.blanks) != (page.selection.source != "none"):
+        raise ValueError(f"{path}: 빈칸과 선택 경로가 일치하지 않는다")
+    return page, candidates, policy
+
+
+def _from_pipeline(documents: list[list[str]], out: Path, density: float, force: bool) -> None:
+    _check_output_path(out, force)
+    rows: list[Row] = []
+    counts: Counter[SelectionSource] = Counter()
+    names = [name.strip() for name, _ in documents]
+    if not all(names) or len(set(names)) != len(names):
+        raise ValueError("PDF 이름은 비워 두거나 중복할 수 없다")
+    for name, (_, directory) in zip(names, documents, strict=True):
+        paths = sorted(
+            p for p in Path(directory).glob("page_*.json") if not p.name.endswith(".stages.json")
+        )
+        if not paths:
+            raise ValueError(f"{directory}: 페이지 결과가 없다")
+        loaded = [_load_pipeline_page(path) for path in paths]
+        policy = loaded[0][2]
+        if policy.density != density or any(saved != policy for _, _, saved in loaded):
+            raise ValueError(f"{directory}: --density 또는 페이지별 실행 정책이 일치하지 않는다")
+        pages = [page for page, _, _ in loaded]
+        candidates = [options for _, options, _ in loaded]
+        if len({page.page.page_no for page in pages}) != len(pages):
+            raise ValueError(f"{directory}: 쪽 번호가 중복된다")
+        stats = build_doc_stats(list(pages), candidates)
+        for page, options, _ in loaded:
+            source = page.selection.source
+            counts[source] += 1
+            blanks = [(b.order + 1, b.token_ids, b.answer) for b in page.blanks]
+            target = target_count(page, options, policy)
+            survival = round(page.selection.quality.survival_ratio, 4)
+            rows.extend(
+                row | {"selection_source": source}
+                for row in _blank_rows(name, page, blanks, target, survival, stats)
+            )
+    _write_sheet(out, rows, force=force, columns=(*COLUMNS, "selection_source"))
+    print(
+        f"{len(rows)}칸 → {out} "
+        f"(gemini={counts['gemini']}, rule={counts['rule']}, none={counts['none']})"
+    )
 
 
 def _sample_pdfs(samples_dir: Path | None) -> list[Path]:
@@ -193,17 +310,33 @@ def pdf_rows(pdf: Path) -> list[Row]:
 def _page_rows(
     name: str, page: PageTokens, selection: Selection, target: int, stats: DocStats
 ) -> list[Row]:
-    median = statistics.median(token.font_size for token in page.tokens) if page.tokens else 1.0
     survival = round(len(selection.spans) / target, 4) if target else 0.0
-    blank_ids = {id_ for span in selection.spans for id_ in span}
-    occurrences = answer_occurrences(page, {len(span) for span in selection.spans})
+    blanks = [
+        (order, span, answer)
+        for order, (span, answer) in enumerate(
+            zip(selection.spans, _answers(page, selection), strict=True), start=1
+        )
+    ]
+    return _blank_rows(name, page, blanks, target, survival, stats)
+
+
+def _blank_rows(
+    name: str,
+    page: PageTokens,
+    blanks: list[tuple[int, list[int], str]],
+    target: int,
+    survival: float,
+    stats: DocStats,
+) -> list[Row]:
+    median = statistics.median(token.font_size for token in page.tokens) if page.tokens else 1.0
+    blank_ids = {token_id for _, span, _ in blanks for token_id in span}
+    occurrences = answer_occurrences(page, {len(span) for _, span, _ in blanks})
     position = {token.id: index for index, token in enumerate(page.tokens)}
-    units = [[page.tokens[position[token_id]] for token_id in span] for span in selection.spans]
+    units = [[page.tokens[position[token_id]] for token_id in span] for _, span, _ in blanks]
     covered = Counter(answer_unit_key(unit) for unit in units)
     rows: list[Row] = []
-    for order, (span, unit, answer) in enumerate(
-        zip(selection.spans, units, _answers(page, selection), strict=True), start=1
-    ):
+    for order, span, answer in sorted(blanks):
+        unit = [page.tokens[position[token_id]] for token_id in span]
         key = "".join(word_key(token.text) for token in unit)
         before, after = _context(page.tokens, position[span[0]], position[span[-1]], blank_ids)
         answer_key = answer_unit_key(unit)

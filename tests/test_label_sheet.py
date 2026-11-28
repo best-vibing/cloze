@@ -3,18 +3,116 @@ import json
 import shutil
 from collections import Counter
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from PIL import Image
 
+from cloze.cli import pipeline as pipeline_cli
 from cloze.cli.__main__ import main as cli_main
-from cloze.cli.label_sheet import COLUMNS, DENSITY, SEED, _page_rows, check_rows, main
+from cloze.cli.label_sheet import COLUMNS, DENSITY, SEED, _page_rows, check_rows, main, read_sheet
 from cloze.core.extract import EXTRACT_VERSION
 from cloze.core.gate import apply_gate
 from cloze.core.models import PageCandidates, PageInfo, PageTokens, Policy, Selection, Slot, Token
+from cloze.core.pipeline import PreparedPage
 from cloze.core.select.rule import DocStats
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PDFS = ("sample.pdf", "twoup.pdf")
+
+
+def test_from_pipeline_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
+    out = tmp_path / "labels.csv"
+    out.write_text("existing ratings", encoding="utf-8")
+    with pytest.raises(SystemExit, match="--force"):
+        main(
+            [
+                "from-pipeline",
+                "--document",
+                "sample.pdf",
+                str(tmp_path),
+                "--density",
+                "5",
+                "--out",
+                str(out),
+            ]
+        )
+    assert out.read_text(encoding="utf-8") == "existing ratings"
+
+
+def test_from_pipeline_keeps_gemini_phrase_and_page_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    page_info = PageInfo(page_no=1, width_pt=100, height_pt=100)
+    tokens = [
+        Token(
+            id=index,
+            text=text,
+            line_id=0,
+            font_size=12,
+            fontname="Regular",
+            bbox=(0.1 + index * 0.2, 0.1, 0.25 + index * 0.2, 0.2),
+        )
+        for index, text in enumerate(("Gradient", "Descent"))
+    ]
+    image = Image.new("RGB", (100, 100), "white")
+    pages = [
+        PreparedPage(PageTokens(page=page_info, tokens=tokens), image, True),
+        PreparedPage(
+            PageTokens(page=page_info.model_copy(update={"page_no": 2}), tokens=[]), image, False
+        ),
+    ]
+    client = Mock(
+        ask_llm=AsyncMock(return_value={"blanks": [{"token_ids": [0, 1], "type": "term"}]}),
+        aclose=AsyncMock(),
+    )
+    monkeypatch.setattr(pipeline_cli, "GeminiClient", Mock(return_value=client))
+    monkeypatch.setattr(pipeline_cli, "prepare", Mock(return_value=pages))
+    pipeline_cli.run_pipeline(
+        b"fixture",
+        Policy(density=50, preset="concept", seed=SEED),
+        tmp_path,
+        rule_only=False,
+        dump_stages=True,
+    )
+    out = tmp_path / "labels.csv"
+    main(
+        [
+            "from-pipeline",
+            "--document",
+            "sample.pdf",
+            str(tmp_path),
+            "--out",
+            str(out),
+            "--density",
+            "50",
+        ]
+    )
+    rows, problems = read_sheet(out.read_text(encoding="utf-8-sig"), completed=False)
+    assert problems == []
+    (row,) = rows
+    assert (row["answer"], row["order"], row["selection_source"]) == (
+        "Gradient Descent",
+        "1",
+        "gemini",
+    )
+    assert (row["exposure_count"], row["page_target"], row["label"], row["labeler"]) == (
+        "0",
+        "1",
+        "",
+        "",
+    )
+    assert "gemini=1, rule=0, none=1" in capsys.readouterr().out
+    client.ask_llm.assert_awaited_once()
+    original = out.read_bytes()
+    args = ["from-pipeline", "--document", "sample.pdf", str(tmp_path), "--out", str(out)]
+    with pytest.raises(SystemExit, match="--density"):
+        main([*args, "--density", "2", "--force"])
+    stages = tmp_path / "page_001.stages.json"
+    stages.rename(stages.with_suffix(".backup"))
+    with pytest.raises(SystemExit, match="--dump-stages"):
+        main([*args, "--density", "50", "--force"])
+    assert out.read_bytes() == original
 
 
 @pytest.mark.parametrize(("other_span", "exposure"), [([], 1), ([7], 1), ([6, 7], 0)])

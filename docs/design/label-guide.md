@@ -115,6 +115,18 @@ Get-ChildItem -LiteralPath $env:CLOZE_SAMPLES_DIR -File |
 
 ### 라벨 완결성 확인과 후보 비교
 
+2차 평가용 시트는 로컬에 저장된 파이프라인 결과로 만들 수 있다. 각 폴더에는 같은 실행에서 생성된 페이지 JSON, 가림 WebP, `--dump-stages` JSON이 있어야 한다. `--density`에는 파이프라인에서 사용한 값을 넣고, 여러 PDF는 `--document`를 반복한다.
+
+```powershell
+uv run python -m cloze.cli.label_sheet from-pipeline --document sample.pdf out/gemini/sample --density 5 --out out/labels/gemini.csv
+```
+
+`--density`는 파이프라인의 단계별 JSON에 기록된 실행 밀도와 일치해야 한다. 정책 기록이 없는 옛 출력은 최신 `pipeline --dump-stages`로 다시 만든다.
+
+페이지 결과의 빈칸 순서를 유지하고, `order`는 라벨 시트 규칙대로 1부터 센다(페이지 JSON의 `order` + 1). `selection_source`에 `gemini` 또는 `rule`을 적는다. 빈칸 없는 쪽까지 포함한 경로별 쪽 수는 실행 출력에서 확인한다. Gemini 실행 도중 규칙 기반으로 폴백한 쪽은 순수 Gemini 결과로 집계하지 않는다. 라벨은 두 평가자가 독립적으로 채운다. 선택 점수와 신호 열은 규칙 선택기 기준 참고값이므로 Gemini 점수로 해석하지 않는다. 최종 결과에서는 게이트 통과 이후의 빈칸만 집계하므로 정답 노출은 두 선택기의 차이를 평가하는 지표로 쓰지 않는다. 최종 빈칸은 좋은 칸·나쁜 칸 비율과 페이지별 빈칸 수를 비교하고, 노출의 임계값을 보정할 때는 게이트 적용 전 시트를 사용한다.
+
+이 시트는 게이트를 통과해 가림 이미지에 표시된 칸을 평가한다. 게이트가 버린 후보까지 포함한 임계값 실험에는 별도의 게이트 적용 전 결과가 필요하다. 두 선택기의 최종 가림 결과를 비교할 때는 규칙 기반 쪽도 `pipeline --rule-only --dump-stages`로 생성한다.
+
 독립 라벨링이 끝나면 평가자별 시트에 [1절](#1-시트-만들기)의 검사를 실행한다.
 각 시트에서 `label`·`labeler`가 전부 채워졌는지, 원본과 같은 칸을 한 번씩 평가했는지
 확인한다. 예를 들어 아래 명령에서 차이가 출력되면 보고서를 만들기 전에 누락·추가 행을 확인한다.
