@@ -49,6 +49,20 @@ Python 버전과 라이브러리 버전은 팀 전체가 같게 쓴다. `uv`가 
 
 PR을 올리면 CI(`.github/workflows/ci.yml`)가 위 다섯 가지를 실행한다. 모두 통과해야 머지한다. 의존성을 추가할 때는 `uv add <패키지>`로 넣어 `uv.lock`도 함께 커밋한다.
 
+### API 키 없이 시연 결과 재현
+
+같은 커밋과 `uv.lock`에서 같은 PDF를 두 번 처리하고, 페이지 JSON과 가림 WebP가 바이트 단위로 같은지 확인한다. 아래 PowerShell 예시에서 `$pdf`는 레포 밖에 보관한 시연 자료 경로다. 출력 디렉터리는 비어 있는 경로를 사용한다.
+
+```powershell
+uv run --locked python -m cloze.cli pipeline $pdf --rule-only --dump-stages --seed 0 --density 5 --out out/demo-a
+uv run --locked python -m cloze.cli pipeline $pdf --rule-only --dump-stages --seed 0 --density 5 --out out/demo-b
+$first = Get-ChildItem out/demo-a -File | Select-Object Name, @{Name='SHA256';Expression={(Get-FileHash -LiteralPath $_.FullName).Hash}}
+$second = Get-ChildItem out/demo-b -File | Select-Object Name, @{Name='SHA256';Expression={(Get-FileHash -LiteralPath $_.FullName).Hash}}
+Compare-Object $first $second -Property Name,SHA256
+```
+
+비교 결과가 비어 있으면 모든 결과 파일이 같다. 결과 JSON의 `selection.source`는 처리 경로를 보여 주고, `selection.attempts`는 Gemini 선택 시도 횟수를 보여 준다. 가림이 있는 학습 페이지와 표지처럼 빈칸이 없는 페이지를 하나씩 보여 준다. 이 절차는 PDF 처리와 이미지 재현을 확인한다. 발표 기기에서의 업로드·워커·채점 리허설은 [시연 기기 점검](https://github.com/best-vibing/cloze/issues/83)과 [발표 리허설](https://github.com/best-vibing/cloze/issues/61)을 따른다.
+
 ### API 서버
 
 ```
