@@ -123,14 +123,17 @@ class LoginBody(BaseModel):
 async def login(body: LoginBody, request: Request, response: Response, db: Db) -> None:
     settings = _settings(request)
     limiter: LoginLimiter = request.app.state.login_limiter
-    if limiter.blocked(body.login_id, time.monotonic()):
+    now = time.monotonic()
+    if limiter.blocked(body.login_id, now):
         raise ApiError("too_many_login_attempts", "잠시 뒤에 다시 시도해 주세요.")
+    # 확인 전에 실패로 세고 성공하면 지운다. blocked와 fail 사이에 await가 없어야
+    # 동시에 온 요청도 차례로 걸린다(#125 리뷰: 동시 20번이 모두 한도를 통과했다).
+    limiter.fail(body.login_id, now)
     user = await get_user_by_login_id(db, body.login_id)
     stored = user.password_hash if user else _dummy_hash()
     # scrypt는 CPU를 0.x초 쓴다. 이벤트 루프를 막지 않도록 스레드에서 돌린다.
     matched = await asyncio.to_thread(verify_password, body.password, stored)
     if user is None or not matched:
-        limiter.fail(body.login_id, time.monotonic())
         raise ApiError("invalid_credentials", "아이디 또는 비밀번호가 맞지 않아요.")
     limiter.reset(body.login_id)
     payload = {"uid": str(user.id), "ver": user.session_version, "exp": time.time() + MAX_AGE_S}

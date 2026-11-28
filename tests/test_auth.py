@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import pytest
 from fastapi import Depends
 from fastapi.testclient import TestClient
@@ -154,6 +155,26 @@ def test_too_many_failures_block_even_correct_password(client: TestClient, login
     res = client.post("/auth/login", json={"login_id": login_id, "password": "pw"})
     assert res.status_code == 429
     assert res.json()["error"]["code"] == "too_many_login_attempts"
+
+
+def test_concurrent_failures_stop_at_limit(tmp_path: Path, login_id: str) -> None:
+    # 확인(blocked)과 기록(fail) 사이에 await가 있으면 동시에 온 요청이 모두 한도를 통과한다
+    # (#125 리뷰: 동시 20번이 모두 비밀번호 확인까지 갔다).
+    app = create_app(_settings(tmp_path))
+    body = {"login_id": login_id, "password": "x"}
+
+    async def run() -> list[int]:
+        transport = httpx.ASGITransport(app=app)
+        client = httpx.AsyncClient(transport=transport, base_url=ORIGIN, headers={"Origin": ORIGIN})
+        async with app.router.lifespan_context(app), client:
+            responses = await asyncio.gather(
+                *(client.post("/auth/login", json=body) for _ in range(20))
+            )
+        return [res.status_code for res in responses]
+
+    codes = asyncio.run(run(), loop_factory=asyncio.SelectorEventLoop)
+    assert codes.count(401) == 5
+    assert codes.count(429) == 15
 
 
 def test_logout(client: TestClient, login_id: str) -> None:

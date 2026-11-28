@@ -11,3 +11,10 @@ class LLMInvalidResponse(Exception):
 
 class LLMPermanentError(Exception):
     """재시도로 해결되지 않는 인증 또는 설정 오류."""
+
+
+class LLMQuotaExhausted(LLMPermanentError):
+    """하루 요청 한도(RPD) 소진. 한도가 초기화될 때까지 다시 해도 실패한다.
+
+    LLMPermanentError를 상속하므로 영구 오류를 처리하는 코드가 그대로 받는다.
+    """

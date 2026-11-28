@@ -5,8 +5,9 @@ import pytest
 from cloze.core.extract import extract_tokens
 from cloze.core.filter import filter_candidates
 from cloze.core.models import PageCandidates, PageInfo, PageTokens, Policy, Selection, Token
+from cloze.core.phrase import MAX_PHRASE_TOKENS
 from cloze.core.redact import PAD_RATIO, blank_bbox
-from cloze.core.select.rule import MAX_PHRASE_TOKENS, build_doc_stats, select_rule
+from cloze.core.select.rule import build_doc_stats, select_rule
 
 SAMPLE = Path(__file__).parent / "fixtures" / "sample.pdf"
 
