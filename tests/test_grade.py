@@ -11,7 +11,7 @@ JUDGE_CASES: list[tuple[str, AnswerKey, Verdict, str]] = [
     ("ＡＴＰ", AnswerKey("ATP"), "correct", "NFKC: 전각 글자"),
     ("  세포   소기관 ", AnswerKey("세포 소기관"), "correct", "앞뒤·연속 공백 정리"),
     ("ATP!", AnswerKey("ATP"), "correct", "문장부호 제거"),
-    ("세포소기관", AnswerKey("세포 소기관"), "near", "공백을 모두 지우지는 않음: 공백 하나 빠짐"),
+    ("세포소기관", AnswerKey("세포 소기관"), "correct", "공백을 모두 지워도 같으면 맞음"),
     # 한국어 조사
     ("미토콘드리아는", AnswerKey("미토콘드리아"), "correct", "입력 끝 조사"),
     ("세포막", AnswerKey("세포막은"), "correct", "정답 어절 끝 조사"),
@@ -43,6 +43,63 @@ JUDGE_CASES: list[tuple[str, AnswerKey, Verdict, str]] = [
     ("Golgyy", AnswerKey("Golgi"), "wrong", "편집 거리 2"),
     ("미토콘드리는", AnswerKey("미토콘드리아"), "near", "'아'를 '는'으로 바꿈: 거리 1"),
     ("미토콘드리에는", AnswerKey("미토콘드리아"), "wrong", "near는 조사를 떼지 않은 입력으로 봄"),
+    # 1단계: 공백을 모두 지운 비교(#47 후속). 구 정답(#124)과 한국어 띄어쓰기
+    (
+        "oxidativephosphorylation",
+        AnswerKey("oxidative phosphorylation"),
+        "correct",
+        "구 정답을 붙여 씀",
+    ),
+    (
+        "oxidative-phosphorylation",
+        AnswerKey("oxidative phosphorylation"),
+        "correct",
+        "구 정답을 붙임표로 이음",
+    ),
+    (
+        "Oxidative  Phosphorylation",
+        AnswerKey("oxidative phosphorylation"),
+        "correct",
+        "대소문자·연속 공백",
+    ),
+    (
+        "oxidative phosphorylation",
+        AnswerKey("oxidativephosphorylation"),
+        "correct",
+        "정답이 붙여 쓴 형태",
+    ),
+    (
+        "oxidativ ephosphorylation",
+        AnswerKey("oxidative phosphorylation"),
+        "correct",
+        "글자는 같고 공백 자리만 다름",
+    ),
+    (
+        "oxidativ phosphorylation",
+        AnswerKey("oxidative phosphorylation"),
+        "near",
+        "오타 한 글자는 지금처럼 near",
+    ),
+    (
+        "oxidativphosphorylation",
+        AnswerKey("oxidative phosphorylation"),
+        "wrong",
+        "near는 공백을 지우지 않은 입력으로 잼: 거리 2",
+    ),
+    ("데이터분석", AnswerKey("데이터 분석"), "correct", "띄어쓰기 빠짐"),
+    ("데이터 분석", AnswerKey("데이터분석"), "correct", "띄어쓰기 더함"),
+    ("데이터분석을", AnswerKey("데이터 분석"), "correct", "공백을 지운 뒤 조사를 뗌"),
+    ("데이터 분석을", AnswerKey("데이터분석"), "correct", "조사가 붙고 띄어 씀"),
+    ("세포 막", AnswerKey("세포막"), "correct", "5자 미만이라 near가 없던 짧은 정답"),
+    ("tca회로", AnswerKey("TCA cycle", variants=("TCA 회로",)), "correct", "변형에도 적용"),
+    ("3 14", AnswerKey("3.14", type="number"), "wrong", "숫자 칸은 글자 비교에서 공백을 안 지움"),
+    (
+        "3 14",
+        AnswerKey("314", type="number"),
+        "correct",
+        "숫자의 공백은 3단계가 지움(1 000 같은 천 단위)",
+    ),
+    ("   ", AnswerKey("a b"), "wrong", "공백만 있는 입력"),
     # 빈 입력
     ("", AnswerKey("ATP"), "wrong", "빈 입력"),
     ("!!", AnswerKey("ATP"), "wrong", "부호만 있는 입력"),
@@ -94,3 +151,12 @@ def test_answer_group_does_not_reuse_one_answer() -> None:
     result = grade({"a": "Y", "b": "Y"}, keys)
     assert result.results == {"a": "wrong", "b": "correct"}
     assert result.score == 0.5
+
+
+def test_answer_group_ignores_spaces() -> None:
+    keys = {
+        "a": AnswerKey("oxidative phosphorylation", answer_group=1),
+        "b": AnswerKey("데이터 분석", answer_group=1),
+    }
+    g = grade({"a": "데이터분석", "b": "oxidative-phosphorylation"}, keys)
+    assert g.results == {"a": "correct", "b": "correct"}
