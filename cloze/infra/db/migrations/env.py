@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, pool
 import cloze.infra.db.blank_sets  # noqa: F401
 import cloze.infra.db.blanks  # noqa: F401
 import cloze.infra.db.documents  # noqa: F401
+import cloze.infra.db.pages  # noqa: F401
 import cloze.infra.db.users  # noqa: F401
 from cloze.config import load_settings
 from cloze.infra.db import Base

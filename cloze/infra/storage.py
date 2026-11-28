@@ -15,6 +15,11 @@ def source_key(document_id: uuid.UUID) -> str:
     return f"documents/{document_id}/source.pdf"
 
 
+def redacted_key(document_id: uuid.UUID, set_id: uuid.UUID, page_no: int) -> str:
+    # 문서 폴더 아래에 두어, 문서를 지울 때 정리 작업이 한 폴더만 보면 되게 한다.
+    return f"documents/{document_id}/blank_sets/{set_id}/{page_no}.webp"
+
+
 class LocalStorage:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
