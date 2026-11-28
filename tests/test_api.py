@@ -35,6 +35,12 @@ def client(tmp_path: Path) -> TestClient:
     return TestClient(make_app(tmp_path / "no-frontend"))
 
 
+def test_health(tmp_path: Path) -> None:
+    res = client(tmp_path).get("/health")
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok"}
+
+
 def test_unknown_path_is_not_found_shape(tmp_path: Path) -> None:
     res = client(tmp_path).get("/nope")
     assert res.status_code == 404

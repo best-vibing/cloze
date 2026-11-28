@@ -33,6 +33,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return errors.error_response("forbidden_origin", "다른 곳에서 보낸 요청은 받지 않아요.")
         return await call_next(request)
 
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        # 프로세스가 요청을 받는지만 본다(DB·Redis는 보지 않는다). compose 상태 확인과
+        # Tailscale Serve·Funnel 접속 확인(#83)에 쓴다.
+        return {"status": "ok"}
+
     # 라우터는 여기에 추가한다(#34 로그인, #50 업로드 등).
 
     if settings.static_dir.is_dir():
