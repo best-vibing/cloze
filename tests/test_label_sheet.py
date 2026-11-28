@@ -20,6 +20,25 @@ FIXTURES = Path(__file__).parent / "fixtures"
 PDFS = ("sample.pdf", "twoup.pdf")
 
 
+def test_from_pipeline_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
+    out = tmp_path / "labels.csv"
+    out.write_text("existing ratings", encoding="utf-8")
+    with pytest.raises(SystemExit, match="--force"):
+        main(
+            [
+                "from-pipeline",
+                "--document",
+                "sample.pdf",
+                str(tmp_path),
+                "--density",
+                "5",
+                "--out",
+                str(out),
+            ]
+        )
+    assert out.read_text(encoding="utf-8") == "existing ratings"
+
+
 def test_from_pipeline_keeps_gemini_phrase_and_page_sources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

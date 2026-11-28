@@ -165,8 +165,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _make(out: Path, force: bool) -> None:
     pdfs = _sample_pdfs(load_settings().samples_dir)
-    if out.exists() and not force:
-        raise SystemExit(f"{out}이 이미 있다. 채운 라벨을 지키려고 멈춘다(덮어쓰려면 --force).")
+    _check_output_path(out, force)
     rows: list[Row] = []
     for pdf in pdfs:
         try:
@@ -176,6 +175,11 @@ def _make(out: Path, force: bool) -> None:
         rows.extend(pdf_result)
     _write_sheet(out, rows, force=force)
     print(f"{len(pdfs)}개 PDF, {len(rows)}칸 → {out} (seed={SEED}, density={DENSITY})")
+
+
+def _check_output_path(out: Path, force: bool) -> None:
+    if out.exists() and not force:
+        raise SystemExit(f"{out}이 이미 있다. 채운 라벨을 지키려고 멈춘다(덮어쓰려면 --force).")
 
 
 def _write_sheet(
@@ -227,6 +231,7 @@ def _load_pipeline_page(path: Path) -> tuple[_PipelinePage, PageCandidates]:
 
 
 def _from_pipeline(documents: list[list[str]], out: Path, density: float, force: bool) -> None:
+    _check_output_path(out, force)
     policy = Policy(density=density, seed=SEED)
     rows: list[Row] = []
     counts: Counter[SelectionSource] = Counter()
