@@ -26,18 +26,30 @@ PHRASE_ENDINGS_KO = tuple(
     "되는 되어 되고 되며 되면 되지 되게 되던 된다 됐다 돼야 돼서 "
     "니다".split()
 )
-# [가설] 끝 글자가 조사(도·가·의·로)처럼 보이지만 명사의 일부인 끝말. 어절이 이것으로 끝나면
-# 조사가 붙은 것으로 보지 않는다. 어절 자체가 이것으로 끝날 때만이라 "복잡도가"는 여전히 조사다.
+# [가설] 끝 글자가 조사(도·가·의·로)처럼 보이지만 명사의 일부인 말. 이런 어절은 조사가 붙은
+# 것으로 보지 않는다. 어절 자체가 이것으로 끝날 때만이라 "복잡도가"는 여전히 조사다.
 # 테스트용 강의자료 8개에서 셌을 때 구 후보 안의 -가·-의·-로는 대부분 조사였다(가 ~315 대 ~6,
-# 의 ~740 대 6, 로 ~385 대 16). -도는 반반(42 대 40)이었다. 그래서 조사 자체를 빼지 않고 명사
-# 끝말만 예외로 둔다. 목록에 없는 명사는 알려진 한계다(selection-and-quality-gate.md 3절).
-# "정의"는 "결정의"(결정+의)도 잡으므로 낱말 전체("재정의", "미정의")로 둔다.
-NOUN_ENDINGS_KO = tuple(
+# 의 ~740 대 6, 로 ~385 대 16). -도는 반반(42 대 40)이었다. 그래서 조사 자체를 빼지 않고 명사만
+# 예외로 둔다. 목록에 없는 명사는 알려진 한계다(selection-and-quality-gate.md 3절).
+#
+# 세 글자 이상 끝말은 뒤에서 비교한다("모델 정확도", "순환복잡도").
+NOUN_SUFFIXES_KO = tuple(
     "복잡도 정확도 유사도 결합도 응집도 정밀도 심각도 충실도 난이도 연관도 흐름도 신뢰도 민감도 "
-    "중요도 완성도 의존도 해상도 속도 빈도 밀도 "
-    "전문가 분석가 평가 "
-    "주의 재정의 미정의 "
-    "회로 경로 마이크로 매크로 히어로".split()
+    "중요도 완성도 의존도 해상도 "
+    "전문가 분석가 "
+    "마이크로 매크로 히어로".split()
+)
+# 두 글자 끝말(회로·속도·밀도·빈도·주의·경로·평가·정의)은 뒤에서 비교하면 "명사+조사"까지 잡는다
+# ("설명회+로", "약속+도", "비밀+도", "민주+의", "결정+의"). 그래서 붙여 쓴 낱말 전체로만 둔다.
+# 두 글자 낱말 하나("회로", "속도")는 normalize_ko가 한 글자 줄기를 남기지 않아 원래 막히지 않는다.
+NOUN_WORDS_KO = frozenset(
+    "전자회로 논리회로 집적회로 디지털회로 "
+    "처리속도 전송속도 실행속도 학습속도 응답속도 "
+    "확률밀도 인구밀도 출현빈도 사용빈도 "
+    "자기주의 자본주의 민주주의 사회주의 "
+    "실행경로 파일경로 최단경로 절대경로 상대경로 "
+    "재평가 성능평가 "
+    "재정의 미정의".split()
 )
 
 type PhraseProblem = Literal["length", "not_consecutive", "crosses_line", "phrase_break"]
@@ -56,7 +68,8 @@ def contiguous(tokens: Sequence[Token]) -> bool:
 def inflected(token: Token) -> bool:
     """앞뒤 부호를 뗀 어절에 조사(normalize_ko)나 PHRASE_ENDINGS_KO의 어미가 붙었는가."""
     word = token.text.strip(EDGE_PUNCTUATION)
-    if normalize_ko(word) != word and not word.endswith(NOUN_ENDINGS_KO):
+    noun = word.endswith(NOUN_SUFFIXES_KO) or word in NOUN_WORDS_KO
+    if normalize_ko(word) != word and not noun:
         return True
     return any(word.endswith(ending) and len(word) > len(ending) for ending in PHRASE_ENDINGS_KO)
 
