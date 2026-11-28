@@ -12,7 +12,8 @@ from cloze.cli import pipeline as pipeline_cli
 from cloze.cli.__main__ import main as cli_main
 from cloze.cli.label_sheet import COLUMNS, DENSITY, SEED, _page_rows, check_rows, main, read_sheet
 from cloze.core.extract import EXTRACT_VERSION
-from cloze.core.models import PageInfo, PageTokens, Policy, Selection, Slot, Token
+from cloze.core.gate import apply_gate
+from cloze.core.models import PageCandidates, PageInfo, PageTokens, Policy, Selection, Slot, Token
 from cloze.core.pipeline import PreparedPage
 from cloze.core.select.rule import DocStats
 
@@ -105,8 +106,8 @@ def test_from_pipeline_keeps_gemini_phrase_and_page_sources(
     client.ask_llm.assert_awaited_once()
 
 
-@pytest.mark.parametrize("hide_second_word", [False, True])
-def test_phrase_exposure_counts_only_full_visible_matches(hide_second_word: bool) -> None:
+@pytest.mark.parametrize(("other_span", "exposure"), [([], 1), ([7], 1), ([6, 7], 0)])
+def test_phrase_exposure_counts_same_answer_units(other_span: list[int], exposure: int) -> None:
     words = [
         ("Gradient", 0),
         ("Descent", 0),
@@ -122,7 +123,7 @@ def test_phrase_exposure_counts_only_full_visible_matches(hide_second_word: bool
             id=index,
             text=word,
             line_id=line,
-            bbox=(0.1, 0.1, 0.2, 0.2),
+            bbox=(0.1 + index * 0.1, 0.1 + line * 0.1, 0.15 + index * 0.1, 0.15 + line * 0.1),
             font_size=12,
             fontname="Regular",
         )
@@ -130,17 +131,25 @@ def test_phrase_exposure_counts_only_full_visible_matches(hide_second_word: bool
     ]
     page = PageTokens(page=PageInfo(page_no=1, width_pt=100, height_pt=100), tokens=tokens)
     spans = [[0, 1], [3]]
-    if hide_second_word:
-        spans.append([7])
+    if other_span:
+        spans.append(other_span)
     selection = Selection(spans=spans, slots=[Slot() for _ in spans], source="rule")
 
     rows = _page_rows("sample.pdf", page, selection, len(spans), DocStats(Counter(), frozenset()))
 
     assert rows[0]["answer"] == "Gradient Descent"
     assert rows[0]["answer_len"] == 15
-    assert rows[0]["exposure_count"] == (0 if hide_second_word else 1)
+    assert rows[0]["exposure_count"] == exposure
     assert str(rows[0]["context_after"]).startswith("Gradient [method]")
     assert rows[1]["exposure_count"] == 0
+
+    if other_span:
+        candidates = PageCandidates(page_no=1, candidate_ids=list(range(len(tokens))), excluded=[])
+        gate = apply_gate(page, candidates, selection, Policy(preset="concept", seed=0))
+        rejected = any(
+            item.token_ids == [0, 1] and item.reason == "answer_exposed" for item in gate.rejected
+        )
+        assert rejected == bool(exposure)
 
 
 @pytest.fixture
