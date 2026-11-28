@@ -58,8 +58,10 @@ def test_prepare_reads_short_korean_fixture() -> None:
     assert sum(page.has_text for page in pipeline.prepare(pdf)) >= 4
 
 
-@pytest.mark.parametrize("name", ["sample.pdf", "korean.pdf"])
-def test_analyze_prepared_pdf_without_live_api(name: str) -> None:
+@pytest.mark.parametrize(
+    ("name", "expected_word"), [("sample.pdf", "Gradient"), ("korean.pdf", "인공지능은")]
+)
+def test_analyze_prepared_pdf_without_live_api(name: str, expected_word: str) -> None:
     pdf = (Path(__file__).parent / "fixtures" / name).read_bytes()
     pages = pipeline.prepare(pdf)
     response = {"doc_type": "강의 슬라이드", "preset": "concept", "reason": "테스트 응답"}
@@ -67,6 +69,9 @@ def test_analyze_prepared_pdf_without_live_api(name: str) -> None:
 
     assert asyncio.run(pipeline.analyze_document(pages, ask)) == response | {"source": "llm"}
     ask.assert_awaited_once()
+    call = ask.await_args
+    assert call is not None
+    assert expected_word in call.args[0]
 
 
 def test_prepare_rejects_document_with_only_repeated_footer(
