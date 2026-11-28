@@ -190,11 +190,11 @@ def _answer_key(text: str) -> str:
     return normalize_ko(normalize(text))
 
 
-def _unit_key(unit: Unit) -> UnitKey:
+def answer_unit_key(unit: Unit) -> UnitKey:
     return tuple(_answer_key(token.text) for token in unit)
 
 
-def _occurrences(page: PageTokens, sizes: set[int]) -> dict[UnitKey, list[Unit]]:
+def answer_occurrences(page: PageTokens, sizes: set[int]) -> dict[UnitKey, list[Unit]]:
     """페이지에서 같은 줄의 이어진 토큰 n개(n은 sizes)를 모두 찾아 정답 키별로 모은다.
     n이 1이면 토큰 하나하나다. 구 정답은 같은 구가 다른 곳에 있을 때만 노출로 본다."""
     found: dict[UnitKey, list[Unit]] = defaultdict(list)
@@ -202,7 +202,7 @@ def _occurrences(page: PageTokens, sizes: set[int]) -> dict[UnitKey, list[Unit]]
         for start in range(len(page.tokens) - size + 1):
             window = page.tokens[start : start + size]
             if contiguous(window):
-                found[_unit_key(window)].append(window)
+                found[answer_unit_key(window)].append(window)
     return found
 
 
@@ -212,12 +212,12 @@ def _complete_answer_groups(
     policy: Policy,
     accepted: list[tuple[Unit, Slot]],
 ) -> list[tuple[Unit, Slot]]:
-    occurrences = _occurrences(page, {len(unit) for unit, _ in accepted})
+    occurrences = answer_occurrences(page, {len(unit) for unit, _ in accepted})
     allowed = set(candidates.candidate_ids)
     seen = {token.id: _box(token) for unit, _ in accepted for token in unit}
     expanded = accepted.copy()
     for unit, slot in accepted:
-        group = occurrences[_unit_key(unit)]
+        group = occurrences[answer_unit_key(unit)]
         if not 1 < len(group) <= MAX_ANSWER_LOCATIONS:
             continue
         missing = [item for item in group if not all(token.id in seen for token in item)]
@@ -243,13 +243,13 @@ def _build_blanks(
     accepted: list[tuple[Unit, Slot]],
     rejected: list[RejectedBlank],
 ) -> list[GateBlank]:
-    occurrences = _occurrences(page, {len(unit) for unit, _ in accepted})
-    covered = Counter(_unit_key(unit) for unit, _ in accepted)
+    occurrences = answer_occurrences(page, {len(unit) for unit, _ in accepted})
+    covered = Counter(answer_unit_key(unit) for unit, _ in accepted)
     ordered = sorted(accepted, key=lambda item: (item[0][0].line_id, item[0][0].bbox[0]))
     blanks: list[GateBlank] = []
     groups: dict[UnitKey, int] = {}
     for unit, slot in ordered:
-        key = _unit_key(unit)
+        key = answer_unit_key(unit)
         if covered[key] != len(occurrences[key]) or covered[key] > MAX_ANSWER_LOCATIONS:
             rejected.append(RejectedBlank([token.id for token in unit], "answer_exposed"))
             continue

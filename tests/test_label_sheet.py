@@ -7,11 +7,60 @@ from pathlib import Path
 import pytest
 
 from cloze.cli.__main__ import main as cli_main
-from cloze.cli.label_sheet import COLUMNS, DENSITY, SEED, check_rows, main
+from cloze.cli.label_sheet import COLUMNS, DENSITY, SEED, _page_rows, check_rows, main
 from cloze.core.extract import EXTRACT_VERSION
+from cloze.core.gate import apply_gate
+from cloze.core.models import PageCandidates, PageInfo, PageTokens, Policy, Selection, Slot, Token
+from cloze.core.select.rule import DocStats
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PDFS = ("sample.pdf", "twoup.pdf")
+
+
+@pytest.mark.parametrize(("other_span", "exposure"), [([], 1), ([7], 1), ([6, 7], 0)])
+def test_phrase_exposure_counts_same_answer_units(other_span: list[int], exposure: int) -> None:
+    words = [
+        ("Gradient", 0),
+        ("Descent", 0),
+        ("Gradient", 1),
+        ("method", 1),
+        ("Gradient", 2),
+        ("Descent", 3),
+        ("Gradient", 4),
+        ("Descent", 4),
+    ]
+    tokens = [
+        Token(
+            id=index,
+            text=word,
+            line_id=line,
+            bbox=(0.1 + index * 0.1, 0.1 + line * 0.1, 0.15 + index * 0.1, 0.15 + line * 0.1),
+            font_size=12,
+            fontname="Regular",
+        )
+        for index, (word, line) in enumerate(words)
+    ]
+    page = PageTokens(page=PageInfo(page_no=1, width_pt=100, height_pt=100), tokens=tokens)
+    spans = [[0, 1], [3]]
+    if other_span:
+        spans.append(other_span)
+    selection = Selection(spans=spans, slots=[Slot() for _ in spans], source="rule")
+
+    rows = _page_rows("sample.pdf", page, selection, len(spans), DocStats(Counter(), frozenset()))
+
+    assert rows[0]["answer"] == "Gradient Descent"
+    assert rows[0]["answer_len"] == 15
+    assert rows[0]["exposure_count"] == exposure
+    assert str(rows[0]["context_after"]).startswith("Gradient [method]")
+    assert rows[1]["exposure_count"] == 0
+
+    if other_span:
+        candidates = PageCandidates(page_no=1, candidate_ids=list(range(len(tokens))), excluded=[])
+        gate = apply_gate(page, candidates, selection, Policy(preset="concept", seed=0))
+        rejected = any(
+            item.token_ids == [0, 1] and item.reason == "answer_exposed" for item in gate.rejected
+        )
+        assert rejected == bool(exposure)
 
 
 @pytest.fixture

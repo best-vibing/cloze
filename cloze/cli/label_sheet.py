@@ -25,6 +25,7 @@ from cloze.cli.__main__ import _answers
 from cloze.config import load_settings
 from cloze.core.extract import EXTRACT_VERSION, extract_tokens
 from cloze.core.filter import filter_candidates, word_key
+from cloze.core.gate import answer_occurrences, answer_unit_key
 from cloze.core.models import DEFAULT_DENSITY, PageTokens, Policy, Selection, Token
 from cloze.core.quality_calibration import LABELS
 from cloze.core.select.rule import (
@@ -195,15 +196,18 @@ def _page_rows(
     median = statistics.median(token.font_size for token in page.tokens) if page.tokens else 1.0
     survival = round(len(selection.spans) / target, 4) if target else 0.0
     blank_ids = {id_ for span in selection.spans for id_ in span}
-    visible = Counter(word_key(t.text) for t in page.tokens if t.id not in blank_ids)
+    occurrences = answer_occurrences(page, {len(span) for span in selection.spans})
     position = {token.id: index for index, token in enumerate(page.tokens)}
+    units = [[page.tokens[position[token_id]] for token_id in span] for span in selection.spans]
+    covered = Counter(answer_unit_key(unit) for unit in units)
     rows: list[Row] = []
-    for order, (span, answer) in enumerate(
-        zip(selection.spans, _answers(page, selection), strict=True), start=1
+    for order, (span, unit, answer) in enumerate(
+        zip(selection.spans, units, _answers(page, selection), strict=True), start=1
     ):
-        token = page.tokens[position[span[0]]]
-        key = word_key(token.text)
-        before, after = _context(page.tokens, position[span[0]], blank_ids)
+        key = "".join(word_key(token.text) for token in unit)
+        before, after = _context(page.tokens, position[span[0]], position[span[-1]], blank_ids)
+        answer_key = answer_unit_key(unit)
+        exposure = len(occurrences[answer_key]) - covered[answer_key]
         rows.append(
             {
                 "file": name,
@@ -215,10 +219,10 @@ def _page_rows(
                 "extract_version": EXTRACT_VERSION,
                 "answer_len": len(key),
                 "hangul": int(any("가" <= char <= "힣" for char in key)),
-                "exposure_count": visible[key],
+                "exposure_count": exposure,
                 "page_target": target,
                 "page_survival": survival,
-                **_signals(token, median, stats),
+                **_signals(unit[0], median, stats),
                 "label": "",
                 "labeler": "",
             }
@@ -236,12 +240,12 @@ def _signals(token: Token, median: float, stats: DocStats) -> Row:
     }
 
 
-def _context(tokens: list[Token], index: int, blank_ids: set[int]) -> tuple[str, str]:
+def _context(tokens: list[Token], first: int, last: int, blank_ids: set[int]) -> tuple[str, str]:
     def show(token: Token) -> str:
         return f"[{token.text}]" if token.id in blank_ids else token.text
 
-    before = tokens[max(0, index - CONTEXT_TOKENS) : index]
-    after = tokens[index + 1 : index + 1 + CONTEXT_TOKENS]
+    before = tokens[max(0, first - CONTEXT_TOKENS) : first]
+    after = tokens[last + 1 : last + 1 + CONTEXT_TOKENS]
     return " ".join(map(show, before)), " ".join(map(show, after))
 
 
