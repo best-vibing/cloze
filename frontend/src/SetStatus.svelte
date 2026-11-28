@@ -1,12 +1,20 @@
 <script>
   // 세트 하나를 2초마다 조회해 상태와 진행률을 보여 주고, 끝나면(done·partial) 쪽마다 입력칸을 겹쳐 그린다(#58).
-  // 답안 제출 → 칸별 결과·점수 → 정답 공개 → 다시 풀기(#36)도 여기서 한다. 규칙은 채점·입력칸 설계 2절.
-  // 서버와는 api.js로만 주고받는다. fetch를 여기서 부르지 않는다.
+  // 답안 제출 → 칸별 결과·점수 → 정답 공개 → 다시 풀기, 지난 풀이 목록, 다시 만들기(#36)도 여기서 한다.
+  // 규칙은 채점·입력칸 설계 2절. 서버와는 api.js로만 주고받는다. fetch를 여기서 부르지 않는다.
   import { onMount, tick } from "svelte";
-  import { ApiError, getBlankSet, revealAttempt, submitAttempt } from "./api.js";
+  import {
+    ApiError,
+    getBlankSet,
+    listAttempts,
+    remakeBlankSet,
+    revealAttempt,
+    submitAttempt,
+  } from "./api.js";
+  import AttemptHistory from "./AttemptHistory.svelte";
   import BlankPage from "./BlankPage.svelte";
   import { blockedByIme, trackComposition } from "./ime.js";
-  import { attemptErrorMessage } from "./messages.js";
+  import { actionErrorMessage, canResend } from "./messages.js";
 
   let { setId } = $props();
 
@@ -48,7 +56,10 @@
       try {
         blankSet = await getBlankSet(setId);
         problem = "";
-        if (!isRunning(blankSet)) return;
+        if (!isRunning(blankSet)) {
+          if (!blankSet.error) loadAttempts();
+          return;
+        }
       } catch (e) {
         // 서버 문장(message)은 텍스트로만 넣는다. Svelte {…}는 HTML로 해석하지 않는다.
         problem = e instanceof ApiError ? e.message : NETWORK;
@@ -128,7 +139,7 @@
   let attempt = $state(null); // 마지막 제출 결과 {attempt_id, results, score, after_reveal}. null이면 푸는 중
   let answers = $state(null); // 공개한 정답 {blank_id: 정답}. null이면 아직 안 봤다
   let showAnswers = $state(false); // 칸에 정답을 보이는 중인가(false면 내 답)
-  let busy = $state(""); // "submit" · "reveal": 요청을 기다리는 중. 두 번 눌러 두 번 보내지 않게 막는다
+  let busy = $state(""); // "submit" · "reveal" · "remake": 요청을 기다리는 중. 두 번 눌러 두 번 보내지 않게 막는다
   let asking = $state(false); // 빈 칸이 있어 "그대로 제출할까요?"를 묻는 중
   let actionProblem = $state("");
 
@@ -154,9 +165,10 @@
     try {
       const sent = Object.fromEntries(blankIds.map((id) => [id, values[id] ?? ""]));
       attempt = await submitAttempt(setId, sent);
+      loadAttempts();
     } catch (e) {
       // 응답이 끊겼으면 서버는 시도를 저장했을 수 있다. 다시 내면 시도가 하나 더 쌓일 뿐 점수는 같다.
-      actionProblem = attemptErrorMessage(e);
+      actionProblem = actionErrorMessage(e);
     } finally {
       busy = "";
     }
@@ -171,8 +183,9 @@
       // 계약상 늘 오지만, 빠지면 칸을 그리다 깨지므로 빈 정답표로 둔다(칸은 빈 글자로 보인다).
       answers = revealed?.answers ?? {};
       showAnswers = true;
+      loadAttempts();
     } catch (e) {
-      actionProblem = attemptErrorMessage(e);
+      actionProblem = actionErrorMessage(e);
     } finally {
       busy = "";
     }
@@ -189,6 +202,62 @@
     values = {};
     await tick();
     document.getElementById(`blank-${order[0]}`)?.focus();
+  }
+
+  // ---- 지난 풀이 목록 (#36, 계약 2절 GET /blank-sets/{id}/attempts) ----
+  let attempts = $state([]);
+
+  /** 끝난 세트를 처음 받았을 때와 제출·정답 공개 뒤에 다시 읽는다. 실패해도 풀이는 계속할 수 있어 조용히 둔다. */
+  // 제출 뒤와 정답 공개 뒤의 요청이 겹치면 늦게 보낸 쪽의 응답만 쓴다(먼저 보낸 응답이 늦게 와도 덮지 않게).
+  let attemptsRequest = 0;
+  async function loadAttempts() {
+    const mine = ++attemptsRequest;
+    try {
+      const list = await listAttempts(setId);
+      if (mine === attemptsRequest) attempts = list;
+    } catch {
+      // 목록은 보조 정보라 풀이를 막지 않는다. 다음 제출·정답 공개 뒤에 다시 읽는다.
+    }
+  }
+
+  // ---- 다시 만들기 (#36, 계약 2절 POST /documents/{id}/blank-sets) ----
+  // 같은 문서로 다른 빈칸 세트를 만든다. 문서 ID는 세트 조회 응답의 document_id다(#118).
+  // 누를 때마다 새 Idempotency-Key를 쓰되, 결과를 받지 못한 요청(응답 끊김·5xx)을 다시 누르면
+  // 서버가 이미 만들었을 수 있으니 같은 키로 보낸다(처음 화면 업로드와 같은 규칙).
+  let remakeKey = null;
+  let askingRemake = $state(false); // 내지 않은 답이 있어 "그래도 새로 만들까요?"를 묻는 중
+
+  // 실패 사유가 "글자를 읽지 못함"이면 같은 PDF로 다시 만들어도 같으니 버튼을 두지 않는다(계약 2절 error.code).
+  // 빈칸 없이 done으로 끝난 세트도 같다. 일부 쪽이 실패한 partial과 처리 실패(processing_failed)는 다시 해 볼 만하다.
+  const remakeWorth = $derived(
+    !!blankSet?.document_id &&
+      (blankSet.error ? blankSet.error.code !== "unreadable_pdf" : pages.length > 0 || blankSet.status === "partial"),
+  );
+  // 제출하지 않은 입력은 다시 만들면(새 세트 화면으로 가면) 사라진다.
+  const unsent = $derived(!attempt && blankIds.some((id) => (values[id] ?? "").trim()));
+
+  async function remake(force) {
+    if (busy || !blankSet?.document_id) return;
+    if (unsent && !force) {
+      askingRemake = true;
+      return;
+    }
+    askingRemake = false;
+    asking = false;
+    busy = "remake";
+    actionProblem = "";
+    remakeKey ??= crypto.randomUUID();
+    try {
+      const preset = blankSet.preset_requested ?? "auto";
+      const { blank_set_id } = await remakeBlankSet(blankSet.document_id, preset, remakeKey);
+      remakeKey = null;
+      location.hash = `#/sets/${blank_set_id}`;
+    } catch (e) {
+      actionProblem = actionErrorMessage(e);
+      if (!canResend(e)) remakeKey = null;
+    } finally {
+      busy = "";
+    }
   }
 </script>
 
@@ -216,8 +285,16 @@
         {:else}
           <p>{pages.length}쪽, 빈칸 {blankCount}개를 받았어요.</p>
         {/if}
+        {#if attempts.length}<AttemptHistory {attempts} />{/if}
       {/if}
     </section>
+    <!-- 풀 쪽이 없으면 아래 막대가 없으니, 다시 만들기를 여기에 둔다(실패한 세트도 다시 만들 수 있다, #118). -->
+    {#if finished && !pages.length && remakeWorth}
+      <p class="problem" role="alert">{actionProblem}</p>
+      <button type="button" class="primary" disabled={busy !== ""} onclick={() => remake(true)}>
+        {busy === "remake" ? "새로 만드는 중…" : "다시 만들기"}
+      </button>
+    {/if}
   {:else if !problem}
     <p>불러오는 중…</p>
   {/if}
@@ -255,7 +332,13 @@
     </div>
     <p class="problem" role="alert">{actionProblem}</p>
     <div class="actions">
-      {#if !attempt}
+      {#if askingRemake && unsent}
+        <span>제출하지 않은 답은 저장되지 않아요. 다른 빈칸으로 새로 만들까요?</span>
+        <button type="button" onclick={() => (askingRemake = false)}>계속 풀기</button>
+        <button type="button" class="primary" disabled={busy !== ""} onclick={() => remake(true)}>
+          {busy === "remake" ? "새로 만드는 중…" : "새로 만들기"}
+        </button>
+      {:else if !attempt}
         {#if asking && emptyCount > 0}
           <span>빈칸 {emptyCount}개가 비어 있어요. 빈 칸은 틀림이 돼요.</span>
           <button type="button" onclick={() => (asking = false)}>계속 풀기</button>
@@ -279,6 +362,12 @@
           </div>
         {/if}
         <button type="button" disabled={busy !== ""} onclick={retry}>다시 풀기</button>
+      {/if}
+      {#if remakeWorth && !(askingRemake && unsent)}
+        <!-- 다시 풀기는 같은 칸, 다시 만들기는 다른 칸으로 된 새 세트다(채점·입력칸 설계 2절). -->
+        <button type="button" disabled={busy !== ""} onclick={() => remake(false)}>
+          {busy === "remake" ? "새로 만드는 중…" : "다시 만들기"}
+        </button>
       {/if}
     </div>
   </footer>

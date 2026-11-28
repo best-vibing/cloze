@@ -1,4 +1,4 @@
-// 오류 문구(업로드, 답안 제출·정답 공개). 서버가 거절한 코드(계약 3절)는 서버 message를 그대로 쓴다.
+// 화면 문구(업로드, 답안 제출·정답 공개·다시 만들기 오류와 시각 표시). 서버가 거절한 코드(계약 3절)는 서버 message를 그대로 쓴다.
 // 실제 한도 값을 아는 쪽이 서버라서다. 화면 문구는 보내기 전에 화면이 직접 거르는 경우와 응답을 받지 못한 경우에만 쓴다.
 import { ApiError } from "./api.js";
 
@@ -34,5 +34,13 @@ function requestErrorMessage(error, again) {
 /** 업로드 오류 → 화면 문장. */
 export const uploadErrorMessage = (error) => requestErrorMessage(error, "다시 보내 주세요.");
 
-/** 답안 제출·정답 공개 오류 → 화면 문장. */
-export const attemptErrorMessage = (error) => requestErrorMessage(error, "다시 눌러 주세요.");
+/** 버튼 동작(답안 제출·정답 공개·다시 만들기) 오류 → 화면 문장. */
+export const actionErrorMessage = (error) => requestErrorMessage(error, "다시 눌러 주세요.");
+
+const TIME = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
+
+/** 서버가 준 ISO 시각 → "26. 11. 28. 오후 3:05". 읽을 수 없는 값이면 빈 글자다(format은 Invalid Date에서 예외를 낸다). */
+export function formatTime(iso) {
+  const time = Date.parse(iso);
+  return Number.isNaN(time) ? "" : TIME.format(time);
+}
