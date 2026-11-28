@@ -23,14 +23,19 @@ from cloze.core.models import (
 from cloze.core.phrase import MAX_PHRASE_TOKENS, PhraseProblem, phrase_problem
 from cloze.core.select.rule import target_count
 
-# v2: 구 빈칸(#47). 프롬프트·스키마를 바꾸면 올린다(blank_sets.prompt_version에 기록).
-PROMPT_VERSION = "gemini-select-v2"
+# v2: 구 빈칸(#47). v3: 구를 끊는 조건(#130). 프롬프트·스키마를 바꾸면 올린다
+# (blank_sets.prompt_version에 기록).
+PROMPT_VERSION = "gemini-select-v3"
 # 구 규칙 위반 메시지. 재시도 피드백으로 Gemini에 가므로 무엇을 고칠지 나눠 쓰되,
 # 응답 내용(id·글자)은 넣지 않는다.
 _PHRASE_ERRORS: dict[PhraseProblem, str] = {
     "length": "Selection contains a phrase with too many tokens",
     "not_consecutive": "Selection contains a phrase whose IDs are not consecutive in order",
     "crosses_line": "Selection contains a phrase that crosses a line break",
+    "phrase_break": (
+        "Selection contains a phrase that is a sentence fragment: a word in it ends with "
+        "a particle or verb ending, or punctuation separates its words"
+    ),
 }
 _PRESETS = {
     "auto": "자료를 설명하는 핵심 개념과 용어를 우선한다.",
@@ -126,7 +131,10 @@ def _prompt(
         "칸 하나는 후보 표시 [id] 하나이거나, 같은 줄에서 바로 이어진 후보 "
         f"최대 {MAX_PHRASE_TOKENS}개(구)다. 구는 ID를 원문 순서대로 모두 넣는다.\n"
         "구는 여러 단어로 된 용어나 제목 속 용어처럼 한 덩어리로 외울 말일 때만 고른다. "
-        "문장 조각은 고르지 않는다. 중복 및 겹치는 칸을 피한다.\n"
+        "문장 조각은 고르지 않는다. 구 안의 어느 단어에도 조사(은·는·을·를·의·과·와·이며 등)나 "
+        "어미(하는·하여·한다·되어·합니다 등)가 붙으면 안 되고, 단어 사이에 쉼표·괄호 같은 "
+        "문장 부호가 있으면 안 된다. 그런 말은 구로 묶지 말고 단어 하나씩 고른다. "
+        "중복 및 겹치는 칸을 피한다.\n"
         f"응답 형식 예시(ID는 형식만 보여 준다): {_EXAMPLE} (type: text, number, term).\n"
     )
     if reused_ids:

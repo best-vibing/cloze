@@ -22,7 +22,7 @@ from cloze.core.models import (
     Slot,
     Token,
 )
-from cloze.core.phrase import MAX_PHRASE_TOKENS, contiguous
+from cloze.core.phrase import MAX_PHRASE_TOKENS, broken, contiguous
 from cloze.core.select.rule import target_count
 
 # [가설] 글자 크기에 곱해 사방에 더할 여백을 구한다.
@@ -37,6 +37,7 @@ type RejectionReason = (
     ExcludeReason
     | Literal[
         "invalid_span",
+        "phrase_break",
         "slot_mismatch",
         "unknown_token",
         "not_candidate",
@@ -127,7 +128,10 @@ def _span_reason(
     page: PageInfo,
     policy: Policy,
 ) -> RejectionReason | None:
-    """칸 하나(토큰 하나 또는 구)의 탈락 사유. 구는 같은 줄에서 id가 바로 이어진 토큰이어야 한다."""
+    """칸 하나(토큰 하나 또는 구)의 탈락 사유. 구는 같은 줄에서 id가 바로 이어진 토큰이어야 한다.
+
+    구가 문장 조각(phrase.broken)이면 phrase_break다. 모양이 틀린 invalid_span과 나눠 센다.
+    """
     if not 1 <= len(span) <= MAX_PHRASE_TOKENS or any(type(item) is not int for item in span):
         return "invalid_span"
     if any(token_id not in tokens for token_id in span):
@@ -135,6 +139,8 @@ def _span_reason(
     unit = [tokens[token_id] for token_id in span]
     if not contiguous(unit):
         return "invalid_span"
+    if broken(unit):
+        return "phrase_break"
     if any(token.id in seen for token in unit):
         return "duplicate_token"
     for token in unit:
