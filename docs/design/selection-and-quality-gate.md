@@ -105,7 +105,9 @@ python -m cloze.cli.quality_calibration_report out/labels/rule.csv --metric scor
 
 #### 구 빈칸 반영 후 실제 자료 확인
 
-`develop`의 `b334818`에서 `Lec1.pdf`, `Lec2.pdf`, `Lec3.pdf`를 `pipeline --rule-only --dump-stages --density 5 --seed 0`으로 실행했다. 페이지별 게이트 결과에 기록된 탈락은 `answer_exposed` 58건이었다. 자료별로는 9건, 18건, 31건이다. 빈칸이 출력되지 않은 두 페이지의 탈락 기록도 포함했다.
+`develop`의 `b334818`에서 `Lec1.pdf` 로컬판(10쪽, 629,761바이트), `Lec2.pdf`(15쪽), `Lec3.pdf`(14쪽)를 `pipeline --rule-only --dump-stages --density 5 --seed 0`으로 실행했다. 페이지별 게이트 결과에 기록된 탈락은 `answer_exposed` 58건이었다. 자료별로는 9건, 18건, 31건이다. 빈칸이 출력되지 않은 두 페이지의 탈락 기록도 포함했다.
+
+팀 공유 폴더의 13쪽짜리 `Lec1.pdf`는 별도 판본이다. 리뷰어는 그 파일에서 `answer_exposed` 6건을 확인했다. 위 집계는 [파이프라인 검증](pdf-extraction.md#페이지-파이프라인-로컬-검증-46)과 같은 10쪽 로컬판 기준이다.
 
 ### 2.6 운영 지표 (게이트가 아니라 경보용)
 
