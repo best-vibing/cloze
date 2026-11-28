@@ -18,11 +18,11 @@
 
 - 제목급 줄을 구분할 수 없는 페이지는 제목 조각을 생략한다. 크기가 확인된 줄이 모두 같은 글자 크기라면, 문서 전체 줄의 중앙 글자 크기보다 큰 경우에만 여러 줄을 제목으로 사용한다. 제목과 본문은 페이지별 JSON 문자열로 인용해 원문의 줄바꿈과 구분자가 프롬프트 구조를 바꾸지 못하게 한다. 문자 예산에서 제목은 데이터 몫의 절반 이하를 사용한다. 기준은 [build_analysis_prompt](../../cloze/core/analyze.py)와 [회귀 테스트](../../tests/test_analyze.py)다.
 - `analyze_document(..., count_tokens=...)`는 같은 모델의 전체 프롬프트를 계산하는 비동기 함수를 선택적으로 받는다. 생략 시 문자 제한만 적용하며 실제 토큰 상한을 보장하지 않는다. 계산과 생성 호출은 별도로 기록해야 한다.
-- `GeminiClient.count_tokens()`는 SDK의 `client.aio.models.count_tokens(model=..., contents=prompt)`와 `total_tokens`를 사용한다([공식 SDK 문서](https://googleapis.github.io/python-genai/)). 생성과 같은 모델·인증·세마포어·종료 보호·오류 변환을 재사용한다. 계산 결과는 생성의 실제 `usage_metadata`나 생성 전용 `on_attempt` 기록에 포함하지 않는다. 분석 함수에 두 메서드를 주입하는 통합 테스트는 완료했으며 운영 호출부 연결과 기본 모델의 실제 API 검증은 남아 있다.
+- `GeminiClient.count_tokens()`는 SDK의 `client.aio.models.count_tokens(model=..., contents=prompt)`와 `total_tokens`를 사용한다([공식 SDK 문서](https://googleapis.github.io/python-genai/)). 생성과 같은 모델·인증·세마포어·종료 보호·오류 변환을 재사용한다. 계산 결과는 생성의 실제 `usage_metadata`나 생성 전용 `on_attempt` 기록에 포함하지 않는다. 분석 함수에 두 메서드를 주입하는 통합 테스트는 완료했다. 운영 호출부 연결과 기본 모델의 토큰 계산 API 실측은 남아 있다.
 - 계산 함수를 주입하면 대표 본문을 페이지별로 축소하고 매번 재계산한다. 문자 및 토큰 축소 후에도 각각의 JSON 문자열을 완결된 상태로 유지한다. 예산에 남길 자료가 없거나 알려진 계산 오류가 나면 생성 없이 기본값으로 전환한다.
 - LLMTransientError 전파와 자동 분석 폴백 사이의 정책은 팀 회의에서 최종 결정할 예정입니다. 현재 구현은 분석 단계에서 concept 폴백을 적용하며, 기존 Gemini 클라이언트의 재시도 정책은 변경하지 않았습니다.
-- 테스트 PDF 두 종류를 실제 `Token`·`PageTokens`로 추출한 뒤 가짜 `ask_llm`으로 분석하는 통합 테스트를 수행한다.
-- 실제 강의 PDF 2~3개에서 Gemini가 고른 자료 종류·방식·이유의 확인은 남아 있다.
+- [파이프라인 통합 테스트](../../tests/test_pipeline.py)는 영어·한국어 PDF에서 추출한 텍스트가 모의 분석 호출의 프롬프트에 들어가는지 확인한다.
+- 실제 강의 PDF 3개에서 Gemini가 반환한 자료 종류·방식·이유는 [#45 실측 기록](https://github.com/best-vibing/cloze/issues/45#issuecomment-7235550640)을 참고한다. 모두 강의 슬라이드에 해당하며, 다른 자료 유형과 프리셋은 이 표본에 포함되지 않았다.
 
 ## 2. 품질 게이트
 
