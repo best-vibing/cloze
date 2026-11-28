@@ -198,17 +198,16 @@ def _page_rows(
     blank_ids = {id_ for span in selection.spans for id_ in span}
     occurrences = answer_occurrences(page, {len(span) for span in selection.spans})
     position = {token.id: index for index, token in enumerate(page.tokens)}
+    units = [[page.tokens[position[token_id]] for token_id in span] for span in selection.spans]
+    covered = Counter(answer_unit_key(unit) for unit in units)
     rows: list[Row] = []
-    for order, (span, answer) in enumerate(
-        zip(selection.spans, _answers(page, selection), strict=True), start=1
+    for order, (span, unit, answer) in enumerate(
+        zip(selection.spans, units, _answers(page, selection), strict=True), start=1
     ):
-        unit = [page.tokens[position[token_id]] for token_id in span]
         key = "".join(word_key(token.text) for token in unit)
         before, after = _context(page.tokens, position[span[0]], position[span[-1]], blank_ids)
-        exposure = sum(
-            all(token.id not in blank_ids for token in match)
-            for match in occurrences[answer_unit_key(unit)]
-        )
+        answer_key = answer_unit_key(unit)
+        exposure = len(occurrences[answer_key]) - covered[answer_key]
         rows.append(
             {
                 "file": name,
