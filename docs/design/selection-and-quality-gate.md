@@ -103,6 +103,12 @@ python -m cloze.cli.quality_calibration_report out/labels/rule.csv --metric scor
 `label_sheet check`는 같은 검증을 사용하며 라벨 작성 중에는 빈 라벨을 허용한다.
 이 표는 후보별 독립 비교이며 평가자 합의, 최적 후보 선정 또는 게이트 기준값 확정이 아니다.
 
+#### 구 빈칸 반영 후 실제 자료 확인
+
+`develop`의 `b334818`에서 `Lec1.pdf` 로컬판(10쪽, 629,761바이트), `Lec2.pdf`(15쪽), `Lec3.pdf`(14쪽)를 `pipeline --rule-only --dump-stages --density 5 --seed 0`으로 실행했다. 페이지별 게이트 결과에 기록된 탈락은 `answer_exposed` 58건이었다. 자료별로는 9건, 18건, 31건이다. 빈칸이 출력되지 않은 두 페이지의 탈락 기록도 포함했다.
+
+팀 공유 폴더의 13쪽짜리 `Lec1.pdf`는 별도 판본이다. 리뷰어는 그 파일에서 `answer_exposed` 6건을 확인했다. 위 집계는 [파이프라인 검증](pdf-extraction.md#페이지-파이프라인-로컬-검증-46)과 같은 10쪽 로컬판 기준이다.
+
 ### 2.6 운영 지표 (게이트가 아니라 경보용)
 
 폴백 페이지 비율, 칸 탈락률, 사용자 정답률 분포, "이 빈칸 이상해요" 신고율. 페이지별 지표·시도 횟수·선택 출처(`gemini` / `fallback`)를 blank_sets에 기록한다. 폴백 비율이 평소보다 크게 뛰면 경보를 보낸다. `LLMPermanentError`(키·설정 오류)는 비율을 기다리지 않고 한 번만 나와도 바로 경보를 보낸다. 프롬프트나 모델을 바꿀 때는 기준 PDF 세트로 지표를 다시 재서 이전 값과 비교한다.
