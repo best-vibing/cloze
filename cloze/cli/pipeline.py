@@ -38,14 +38,14 @@ async def _run(
         async for result in build(
             pages, policy, factory, skip_pages=set(), analysis=None, avoid_ids={}
         ):
-            _write_result(result, out, dump_stages=dump_stages)
+            _write_result(result, out, policy, dump_stages=dump_stages)
             print(f"{result.page_no:>4} | {result.source:>6} | {len(result.blanks):>3}")
     finally:
         if client is not None:
             await client.aclose()
 
 
-def _write_result(result: PageResult, out: Path, *, dump_stages: bool) -> None:
+def _write_result(result: PageResult, out: Path, policy: Policy, *, dump_stages: bool) -> None:
     stem = f"page_{result.page_no:03d}"
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -62,6 +62,7 @@ def _write_result(result: PageResult, out: Path, *, dump_stages: bool) -> None:
     (out / f"{stem}.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     if dump_stages:
         stages = {
+            "policy": policy.model_dump(mode="json"),
             "extract": result.tokens.model_dump(mode="json"),
             "filter": result.candidates.model_dump(mode="json"),
             "selection": payload["selection"],

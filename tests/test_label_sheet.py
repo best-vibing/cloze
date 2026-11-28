@@ -104,6 +104,15 @@ def test_from_pipeline_keeps_gemini_phrase_and_page_sources(
     )
     assert "gemini=1, rule=0, none=1" in capsys.readouterr().out
     client.ask_llm.assert_awaited_once()
+    original = out.read_bytes()
+    args = ["from-pipeline", "--document", "sample.pdf", str(tmp_path), "--out", str(out)]
+    with pytest.raises(SystemExit, match="--density"):
+        main([*args, "--density", "2", "--force"])
+    stages = tmp_path / "page_001.stages.json"
+    stages.rename(stages.with_suffix(".backup"))
+    with pytest.raises(SystemExit, match="--dump-stages"):
+        main([*args, "--density", "50", "--force"])
+    assert out.read_bytes() == original
 
 
 @pytest.mark.parametrize(("other_span", "exposure"), [([], 1), ([7], 1), ([6, 7], 0)])

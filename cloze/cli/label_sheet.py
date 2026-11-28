@@ -209,14 +209,20 @@ class _PipelinePage(PageTokens):
     selection: _PipelineSelection
 
 
-def _load_pipeline_page(path: Path) -> tuple[_PipelinePage, PageCandidates]:
+def _load_pipeline_page(path: Path) -> tuple[_PipelinePage, PageCandidates, Policy]:
     page = _PipelinePage.model_validate_json(path.read_bytes())
     if page.schema_version != SCHEMA_VERSION or page.extract_version != EXTRACT_VERSION:
         raise ValueError(f"{path}: 지원하지 않는 파이프라인 결과 버전")
-    stage = json.loads(path.with_suffix(".stages.json").read_bytes())
-    candidates = PageCandidates.model_validate(
-        stage.get("filter") if isinstance(stage, dict) else None
-    )
+    stages_path = path.with_suffix(".stages.json")
+    if not stages_path.is_file():
+        raise ValueError(f"{path}: pipeline --dump-stages의 단계별 JSON이 필요하다")
+    stage = json.loads(stages_path.read_bytes())
+    if not isinstance(stage, dict) or "policy" not in stage:
+        raise ValueError(
+            f"{stages_path}: 실행 정책이 없다. 최신 pipeline --dump-stages로 다시 실행한다"
+        )
+    policy = Policy.model_validate(stage["policy"])
+    candidates = PageCandidates.model_validate(stage.get("filter"))
     if candidates.page_no != page.page.page_no or not path.with_suffix(".webp").is_file():
         raise ValueError(f"{path}: 같은 쪽의 필터 결과와 가림 이미지가 필요하다")
     token_ids = {token.id for token in page.tokens}
@@ -227,12 +233,11 @@ def _load_pipeline_page(path: Path) -> tuple[_PipelinePage, PageCandidates]:
         raise ValueError(f"{path}: 빈칸 순서는 0부터 연속해야 한다")
     if bool(page.blanks) != (page.selection.source != "none"):
         raise ValueError(f"{path}: 빈칸과 선택 경로가 일치하지 않는다")
-    return page, candidates
+    return page, candidates, policy
 
 
 def _from_pipeline(documents: list[list[str]], out: Path, density: float, force: bool) -> None:
     _check_output_path(out, force)
-    policy = Policy(density=density, seed=SEED)
     rows: list[Row] = []
     counts: Counter[SelectionSource] = Counter()
     names = [name.strip() for name, _ in documents]
@@ -245,12 +250,15 @@ def _from_pipeline(documents: list[list[str]], out: Path, density: float, force:
         if not paths:
             raise ValueError(f"{directory}: 페이지 결과가 없다")
         loaded = [_load_pipeline_page(path) for path in paths]
-        pages = [page for page, _ in loaded]
-        candidates = [options for _, options in loaded]
+        policy = loaded[0][2]
+        if policy.density != density or any(saved != policy for _, _, saved in loaded):
+            raise ValueError(f"{directory}: --density 또는 페이지별 실행 정책이 일치하지 않는다")
+        pages = [page for page, _, _ in loaded]
+        candidates = [options for _, options, _ in loaded]
         if len({page.page.page_no for page in pages}) != len(pages):
             raise ValueError(f"{directory}: 쪽 번호가 중복된다")
         stats = build_doc_stats(list(pages), candidates)
-        for page, options in loaded:
+        for page, options, _ in loaded:
             source = page.selection.source
             counts[source] += 1
             blanks = [(b.order + 1, b.token_ids, b.answer) for b in page.blanks]
