@@ -56,6 +56,14 @@
 
 개수는 `blanks`에 기록된 가림 위치 기준이며, 함께 가린 반복 위치도 포함한다.
 
+선택기나 품질 게이트가 바뀌면 같은 입력과 설정으로 다시 측정한다. 위 강의 PDF는 공유하지 않으므로, 저장소의 합성 자료로 페이지 JSON과 가림 이미지를 재현할 수 있다.
+
+```text
+uv run --locked python -m cloze.cli pipeline tests/fixtures/sample.pdf --rule-only --dump-stages --density 5 --seed 0 --out out/pipeline-review
+```
+
+합성 자료는 세 쪽 모두 `rule`로 처리되며 1쪽에 가림 위치 6개가 있다. [1쪽 가림 WebP](pipeline-review-sample.webp)는 같은 명령의 `page_001.webp`다.
+
 ## 출처
 
 - pdfplumber 좌표 규약·글자 필드: https://github.com/jsvine/pdfplumber/blob/stable/README.md
