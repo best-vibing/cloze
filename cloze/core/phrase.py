@@ -20,10 +20,24 @@ MAX_PHRASE_TOKENS = 3
 # [가설] 구 안의 어절이 이것으로 끝나면 용어가 아니라 문장 조각으로 본다(#130).
 # 하/되 뒤 어미와 존댓말 끝만 둔다. -면·-고·-한처럼 짧은 어미는 화면·광고·권한 같은 명사를
 # 잘못 잡아 넣지 않는다. 긴 것부터 비교할 필요는 없다(끝나는지만 본다).
+# -기(명사형)는 넣지 않는다: "말하기 평가"처럼 용어 안의 명사형을 잡는다(#131 리뷰).
 PHRASE_ENDINGS_KO = tuple(
-    "하는 하여 하고 하며 하면 하지 하게 하던 한다 했다 해야 해서 하기 "
-    "되는 되어 되고 되며 되면 되지 되게 되던 된다 됐다 돼야 돼서 되기 "
+    "하는 하여 하고 하며 하면 하지 하게 하던 한다 했다 해야 해서 "
+    "되는 되어 되고 되며 되면 되지 되게 되던 된다 됐다 돼야 돼서 "
     "니다".split()
+)
+# [가설] 끝 글자가 조사(도·가·의·로)처럼 보이지만 명사의 일부인 끝말. 어절이 이것으로 끝나면
+# 조사가 붙은 것으로 보지 않는다. 어절 자체가 이것으로 끝날 때만이라 "복잡도가"는 여전히 조사다.
+# 테스트용 강의자료 8개에서 셌을 때 구 후보 안의 -가·-의·-로는 대부분 조사였다(가 ~315 대 ~6,
+# 의 ~740 대 6, 로 ~385 대 16). -도는 반반(42 대 40)이었다. 그래서 조사 자체를 빼지 않고 명사
+# 끝말만 예외로 둔다. 목록에 없는 명사는 알려진 한계다(selection-and-quality-gate.md 3절).
+# "정의"는 "결정의"(결정+의)도 잡으므로 낱말 전체("재정의", "미정의")로 둔다.
+NOUN_ENDINGS_KO = tuple(
+    "복잡도 정확도 유사도 결합도 응집도 정밀도 심각도 충실도 난이도 연관도 흐름도 신뢰도 민감도 "
+    "중요도 완성도 의존도 해상도 속도 빈도 밀도 "
+    "전문가 분석가 평가 "
+    "주의 재정의 미정의 "
+    "회로 경로 마이크로 매크로 히어로".split()
 )
 
 type PhraseProblem = Literal["length", "not_consecutive", "crosses_line", "phrase_break"]
@@ -42,7 +56,7 @@ def contiguous(tokens: Sequence[Token]) -> bool:
 def inflected(token: Token) -> bool:
     """앞뒤 부호를 뗀 어절에 조사(normalize_ko)나 PHRASE_ENDINGS_KO의 어미가 붙었는가."""
     word = token.text.strip(EDGE_PUNCTUATION)
-    if normalize_ko(word) != word:
+    if normalize_ko(word) != word and not word.endswith(NOUN_ENDINGS_KO):
         return True
     return any(word.endswith(ending) and len(word) > len(ending) for ending in PHRASE_ENDINGS_KO)
 
