@@ -255,7 +255,7 @@ permanent로 전달한다. 종료는 자동 재시도하거나 생성 기록을 
 | `file_too_large` | 413 | 파일 크기 상한 초과 |
 | `not_pdf` | 415 | MIME 시그니처가 PDF가 아님 |
 | `invalid_request` | 422 | 요청 값이 계약과 다름(없는 프리셋 값, 헤더 누락 등) |
-| `encrypted_pdf` | 422 | 암호화되었거나 JavaScript가 포함된 PDF |
+| `encrypted_pdf` | 422 | 암호화되었거나 JavaScript가 포함된 PDF. 열기 암호뿐 아니라 권한(소유자) 암호만 걸린 파일도 받지 않는다(본문 글자를 뽑아 빈칸을 만들기 때문). 메시지는 열기 암호·권한 제한·스크립트를 나눠 보여 준다 |
 | `too_many_pages` | 422 | 쪽수 상한 초과 |
 | `daily_limit_exceeded` | 429 | 사용자 하루 처리 쪽수 초과 |
 | `too_many_running` | 429 | 사용자의 진행 중 세트 수 초과 |
